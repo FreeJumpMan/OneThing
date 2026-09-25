@@ -51,6 +51,22 @@ data class AppUsageInterval(
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
 }
 
+/** 一段「专注 App」的使用片段（已按短暂切换阈值合并，带 App 明细） */
+data class FocusUsageSegment(
+    val startMs: Long,
+    val endMs: Long,
+    val appNames: List<String>,
+) {
+    val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
+}
+
+/** 专注 App 的原始片段（未合并） */
+private data class RawFocusSlice(
+    val startMs: Long,
+    val endMs: Long,
+    val appName: String,
+)
+
 /**
  * 读取系统层面的 App 使用时长（UsageStatsManager）。
  *
@@ -167,11 +183,27 @@ class UsageStatsRepository(private val context: Context) {
         startMs: Long,
         endMs: Long,
         gapToleranceMs: Long = DEFAULT_SWITCH_TOLERANCE_MS,
-    ): List<TimeInterval> = withContext(Dispatchers.IO) {
+    ): List<TimeInterval> =
+        loadFocusUsageSegments(packages, startMs, endMs, gapToleranceMs)
+            .map { TimeInterval(it.startMs, it.endMs) }
+
+    /**
+     * 读取指定区间内「专注 App」的使用片段（事件级，已按短暂切换阈值合并，带 App 明细）。
+     *
+     * 与 [loadFocusAppIntervals] 共用同一套合并逻辑（同一口径），
+     * 区别只在保留 App 名称，供历史时间线展示使用。
+     */
+    suspend fun loadFocusUsageSegments(
+        packages: Set<String>,
+        startMs: Long,
+        endMs: Long,
+        gapToleranceMs: Long = DEFAULT_SWITCH_TOLERANCE_MS,
+    ): List<FocusUsageSegment> = withContext(Dispatchers.IO) {
         if (packages.isEmpty()) return@withContext emptyList()
         val manager = context.getSystemService(UsageStatsManager::class.java)
             ?: return@withContext emptyList()
         val events = manager.queryEvents(startMs, endMs) ?: return@withContext emptyList()
+        val pm = context.packageManager
 
         val resumedType = if (Build.VERSION.SDK_INT >= 29) {
             UsageEvents.Event.ACTIVITY_RESUMED
@@ -187,8 +219,19 @@ class UsageStatsRepository(private val context: Context) {
         }
 
         val openAt = mutableMapOf<String, Long>()
-        val raw = mutableListOf<TimeInterval>()
+        val raw = mutableListOf<RawFocusSlice>()
         val event = UsageEvents.Event()
+        val nameCache = mutableMapOf<String, String>()
+
+        fun nameOf(pkg: String): String = nameCache.getOrPut(pkg) {
+            appLabel(pm, pkg) ?: pkg
+        }
+
+        fun closeSlice(pkg: String, endTimeMs: Long) {
+            val start = openAt.remove(pkg) ?: return
+            if (endTimeMs <= start) return
+            raw += RawFocusSlice(start, endTimeMs, nameOf(pkg))
+        }
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
@@ -197,28 +240,50 @@ class UsageStatsRepository(private val context: Context) {
             when (event.eventType) {
                 resumedType -> {
                     // 同一 App 连续 RESUMED 时先关闭前一段，避免丢失区间
-                    openAt[pkg]?.let { previous ->
-                        if (event.timeStamp > previous) {
-                            raw += TimeInterval(previous, event.timeStamp)
-                        }
-                    }
+                    if (openAt.containsKey(pkg)) closeSlice(pkg, event.timeStamp)
                     openAt[pkg] = event.timeStamp
                 }
 
-                pausedType, UsageEvents.Event.ACTIVITY_STOPPED -> {
-                    val start = openAt.remove(pkg)
-                    if (start != null && event.timeStamp > start) {
-                        raw += TimeInterval(start, event.timeStamp)
-                    }
-                }
+                pausedType, UsageEvents.Event.ACTIVITY_STOPPED -> closeSlice(pkg, event.timeStamp)
             }
         }
-        // 查询窗口结束时仍在前台的 App
-        openAt.values.forEach { start ->
-            if (endMs > start) raw += TimeInterval(start, endMs)
-        }
+        // 查询窗口结束时仍在前台的 App（窗口含未来时截止到当前时刻，避免把进行中的使用算到未来）
+        val closeAt = minOf(endMs, System.currentTimeMillis())
+        openAt.keys.toList().forEach { pkg -> closeSlice(pkg, closeAt) }
 
-        IntervalMerger.merge(raw, gapToleranceMs)
+        mergeFocusSlices(raw, gapToleranceMs)
+    }
+
+    /** 合并专注片段：间隔不超过阈值的拼接为一段，保留 App 明细（与 IntervalMerger.merge 同一口径） */
+    private fun mergeFocusSlices(
+        raw: List<RawFocusSlice>,
+        gapToleranceMs: Long,
+    ): List<FocusUsageSegment> {
+        val sorted = raw
+            .filter { it.endMs > it.startMs }
+            .sortedBy { it.startMs }
+        if (sorted.isEmpty()) return emptyList()
+
+        val result = mutableListOf<FocusUsageSegment>()
+        var currentStart = sorted.first().startMs
+        var currentEnd = sorted.first().endMs
+        val names = mutableListOf(sorted.first().appName)
+
+        for (index in 1 until sorted.size) {
+            val next = sorted[index]
+            if (next.startMs - currentEnd <= gapToleranceMs) {
+                if (next.endMs > currentEnd) currentEnd = next.endMs
+                if (next.appName !in names) names += next.appName
+            } else {
+                result += FocusUsageSegment(currentStart, currentEnd, names.toList())
+                currentStart = next.startMs
+                currentEnd = next.endMs
+                names.clear()
+                names += next.appName
+            }
+        }
+        result += FocusUsageSegment(currentStart, currentEnd, names.toList())
+        return result
     }
 
     /**

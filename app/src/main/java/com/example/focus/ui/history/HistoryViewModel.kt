@@ -6,13 +6,20 @@ import androidx.lifecycle.viewModelScope
 import com.example.focus.data.backup.BackupManager
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.FocusSession
+import com.example.focus.data.prefs.SettingsStore
 import com.example.focus.data.repo.SessionRepository
 import com.example.focus.data.sync.CalendarSyncManager
+import com.example.focus.data.usage.IntervalMerger
+import com.example.focus.data.usage.TimeInterval
+import com.example.focus.data.usage.UsageStatsRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -30,6 +37,16 @@ import java.time.format.DateTimeFormatter
  * 日程视图数据：全部会话。
  * 日历同步：权限不足时挂起待同步会话，授权后重试。
  */
+/** 专注 App 的自动使用记录（由系统使用记录派生，仅供展示，不入库） */
+data class AutoRecord(
+    val appNames: List<String>,
+    val startMs: Long,
+    val endMs: Long,
+) {
+    val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
+    val displayName: String get() = appNames.joinToString("、")
+}
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -40,6 +57,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         AppDatabase.get(application).timelineEventDao(),
     )
     private val backupManager = BackupManager(AppDatabase.get(application))
+    private val usageRepo = UsageStatsRepository(application)
+    private val settingsStore = SettingsStore(application)
+    private val focusAppDao = AppDatabase.get(application).focusAppDao()
 
     val currentMonth = MutableStateFlow(YearMonth.now())
     val selectedDate = MutableStateFlow(LocalDate.now())
@@ -64,6 +84,34 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         selectedDate.flatMapLatest { date ->
             repo.observeByDate(date.toString())
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 用户标记为「专注 App」的包名集合 */
+    private val focusPackages: Flow<Set<String>> =
+        focusAppDao.observeAll().map { list ->
+            list.filter { it.enabled }.map { it.packageName }.toSet()
+        }
+
+    /** 自动记录刷新信号：从后台切回时变化，触发重新读取系统使用记录 */
+    private val autoRefreshTick = MutableStateFlow(0L)
+
+    /**
+     * 选中日期当天的「专注 App 自动记录」：来自系统使用记录，与计时记录去重后的剩余部分。
+     * 展示层实时派生、不落库；仅覆盖系统使用记录保留期内的日期。
+     */
+    val autoRecords: StateFlow<List<AutoRecord>> =
+        combine(
+            selectedDate,
+            focusPackages,
+            selectedDaySessions,
+            autoRefreshTick,
+        ) { date, packages, sessions, _ ->
+            loadAutoRecords(date, packages, sessions)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    /** 界面回到前台时调用：自动记录不落库，需要主动刷新系统数据 */
+    fun refreshAutoRecords() {
+        autoRefreshTick.value = System.currentTimeMillis()
+    }
 
     /** 已同步到日历的会话 id 集合 */
     private val _syncedIds = MutableStateFlow<Set<Long>>(emptySet())
@@ -259,6 +307,52 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private fun formatDate(epochMs: Long): String =
         Instant.ofEpochMilli(epochMs).atZone(ZoneId.systemDefault())
             .toLocalDate().format(DateTimeFormatter.ISO_LOCAL_DATE)
+
+    /**
+     * 读取某天的「专注 App 自动记录」：系统使用片段剪掉计时记录覆盖的时段。
+     * 剩余不足 1 分钟的碎片不展示（避免视觉噪音）。
+     */
+    private suspend fun loadAutoRecords(
+        date: LocalDate,
+        packages: Set<String>,
+        sessions: List<FocusSession>,
+    ): List<AutoRecord> {
+        if (packages.isEmpty() || !usageRepo.hasUsageAccess()) return emptyList()
+
+        val zone = ZoneId.systemDefault()
+        val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val toleranceMs = settingsStore.settings.first().switchToleranceMinutes * 60_000L
+
+        val segments = usageRepo.loadFocusUsageSegments(packages, dayStart, dayEnd, toleranceMs)
+        if (segments.isEmpty()) return emptyList()
+
+        // 与当天计时记录重叠的部分剪掉：同一段时间不重复展示
+        val sessionIntervals = sessions
+            .filter { it.startTimeMs < dayEnd && it.endTimeMs > dayStart }
+            .map {
+                TimeInterval(
+                    maxOf(it.startTimeMs, dayStart),
+                    minOf(it.endTimeMs, dayEnd),
+                )
+            }
+
+        val minDisplayMs = 60_000L
+        return segments.flatMap { segment ->
+            IntervalMerger.subtract(
+                listOf(TimeInterval(segment.startMs, segment.endMs)),
+                sessionIntervals,
+            )
+                .filter { it.durationMs >= minDisplayMs }
+                .map { remaining ->
+                    AutoRecord(
+                        appNames = segment.appNames,
+                        startMs = remaining.startMs,
+                        endMs = remaining.endMs,
+                    )
+                }
+        }
+    }
 
     fun clearError() {
         _error.value = null

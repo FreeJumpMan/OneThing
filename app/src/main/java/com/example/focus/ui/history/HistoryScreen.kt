@@ -8,6 +8,7 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -61,6 +62,7 @@ import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -81,6 +83,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.app.ActivityCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.focus.data.db.FocusSession
 import com.example.focus.ui.components.MonthCalendar
@@ -107,7 +112,18 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     val selectedDate by viewModel.selectedDate.collectAsState()
     val markedDates by viewModel.markCounts.collectAsState()
     val daySessions by viewModel.selectedDaySessions.collectAsState()
+    val autoRecords by viewModel.autoRecords.collectAsState()
     val syncedIds by viewModel.syncedIds.collectAsState()
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // 从后台切回时重新拉取系统使用记录（专注 App 自动记录为实时派生数据，不落库）
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) viewModel.refreshAutoRecords()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val pendingSync by viewModel.pendingSync.collectAsState()
     val pendingSyncAll by viewModel.pendingSyncAll.collectAsState()
     val debugPending by viewModel.debugPending.collectAsState()
@@ -295,10 +311,12 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
-                if (daySessions.isNotEmpty()) {
-                    val totalMs = daySessions.sumOf { it.durationMs }
+                if (daySessions.isNotEmpty() || autoRecords.isNotEmpty()) {
+                    val totalMs = daySessions.sumOf { it.durationMs } +
+                        autoRecords.sumOf { it.durationMs }
+                    val countText = if (daySessions.isNotEmpty()) " · ${daySessions.size} 次" else ""
                     Text(
-                        text = "${formatDurationCompact(totalMs)} · ${daySessions.size} 次",
+                        text = formatDurationCompact(totalMs) + countText,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Medium,
@@ -323,7 +341,12 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
         }
         Spacer(modifier = Modifier.height(10.dp))
 
-        if (daySessions.isEmpty()) {
+        // 时间线 = 计时记录 + 专注 App 自动记录，按开始时间排序
+        val timelineEntries = remember(daySessions, autoRecords, syncedIds) {
+            buildTimelineEntries(daySessions, autoRecords, syncedIds)
+        }
+
+        if (timelineEntries.isEmpty()) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -340,16 +363,29 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
             LazyColumn(
                 modifier = Modifier.weight(1f),
             ) {
-                itemsIndexed(daySessions, key = { _, s -> s.id }) { index, session ->
-                    TimelineRow(
-                        session = session,
-                        synced = session.id in syncedIds,
-                        isFirst = index == 0,
-                        isLast = index == daySessions.lastIndex,
-                        onSync = { viewModel.syncToCalendar(session) },
-                        onEdit = { editingSession = session },
-                        onDelete = { deleteTarget = session },
-                    )
+                itemsIndexed(timelineEntries, key = { _, e -> e.key }) { index, entry ->
+                    when (entry) {
+                        is TimelineEntry.Session -> TimelineRow(
+                            startMs = entry.startMs,
+                            endMs = entry.endMs,
+                            name = entry.name,
+                            synced = entry.synced,
+                            isFirst = index == 0,
+                            isLast = index == timelineEntries.lastIndex,
+                            onSync = { viewModel.syncToCalendar(entry.session) },
+                            onEdit = { editingSession = entry.session },
+                            onDelete = { deleteTarget = entry.session },
+                        )
+
+                        is TimelineEntry.Auto -> TimelineRow(
+                            startMs = entry.startMs,
+                            endMs = entry.endMs,
+                            name = entry.name,
+                            auto = true,
+                            isFirst = index == 0,
+                            isLast = index == timelineEntries.lastIndex,
+                        )
+                    }
                 }
             }
         }
@@ -469,19 +505,54 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     }
 }
 
+/** 时间线条目：计时记录与「专注 App 自动记录」的统一包装（列表按开始时间排序） */
+private sealed interface TimelineEntry {
+    val key: String
+    val startMs: Long
+    val endMs: Long
+    val name: String
+
+    data class Session(val session: FocusSession, val synced: Boolean) : TimelineEntry {
+        override val key: String get() = "s_${session.id}"
+        override val startMs: Long get() = session.startTimeMs
+        override val endMs: Long get() = session.endTimeMs
+        override val name: String get() = session.name
+    }
+
+    data class Auto(val record: AutoRecord) : TimelineEntry {
+        override val key: String get() = "a_${record.startMs}"
+        override val startMs: Long get() = record.startMs
+        override val endMs: Long get() = record.endMs
+        override val name: String get() = record.displayName
+    }
+}
+
+private fun buildTimelineEntries(
+    sessions: List<FocusSession>,
+    autoRecords: List<AutoRecord>,
+    syncedIds: Set<Long>,
+): List<TimelineEntry> = buildList {
+    sessions.forEach { add(TimelineEntry.Session(it, synced = it.id in syncedIds)) }
+    autoRecords.forEach { add(TimelineEntry.Auto(it)) }
+}.sortedBy { it.startMs }
+
 /**
  * 时间线形式的单条记录：左侧开始时间、中间竖线与节点、右侧事项名与时长。
  * isFirst / isLast 控制竖线首尾不伸出。
+ * auto = true 表示「专注 App 自动记录」：空心节点、无操作菜单，仅作展示。
  */
 @Composable
 private fun TimelineRow(
-    session: FocusSession,
-    synced: Boolean,
+    startMs: Long,
+    endMs: Long,
+    name: String,
     isFirst: Boolean,
     isLast: Boolean,
-    onSync: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    auto: Boolean = false,
+    synced: Boolean = false,
+    onSync: (() -> Unit)? = null,
+    onEdit: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -490,7 +561,7 @@ private fun TimelineRow(
     ) {
         // 开始时间
         Text(
-            text = formatTimeOfDay(session.startTimeMs),
+            text = formatTimeOfDay(startMs),
             fontSize = 12.sp,
             fontFamily = FontFamily.Monospace,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -501,7 +572,7 @@ private fun TimelineRow(
         )
         Spacer(modifier = Modifier.width(8.dp))
 
-        // 时间线：上段线 + 节点 + 下段线
+        // 时间线：上段线 + 节点 + 下段线（自动记录用空心节点区分）
         Column(
             modifier = Modifier
                 .width(12.dp)
@@ -516,13 +587,26 @@ private fun TimelineRow(
                         if (isFirst) Color.Transparent else MaterialTheme.colorScheme.outlineVariant
                     )
             )
-            Box(
-                modifier = Modifier
-                    .padding(vertical = 2.dp)
-                    .size(9.dp)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primary)
-            )
+            if (auto) {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 2.dp)
+                        .size(9.dp)
+                        .border(
+                            width = 1.5.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
+                            shape = CircleShape,
+                        )
+                )
+            } else {
+                Box(
+                    modifier = Modifier
+                        .padding(vertical = 2.dp)
+                        .size(9.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
             Box(
                 modifier = Modifier
                     .width(1.5.dp)
@@ -543,7 +627,7 @@ private fun TimelineRow(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = session.name,
+                    text = name,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -551,57 +635,65 @@ private fun TimelineRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (synced) {
+                if (auto) {
                     Text(
-                        text = "已同步",
+                        text = "自动",
                         fontSize = 10.sp,
-                        color = Color(0xFF48B59B),
+                        color = MaterialTheme.colorScheme.outline,
                     )
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-                Box {
-                    IconButton(
-                        onClick = { menuOpen = true },
-                        modifier = Modifier.size(32.dp),
-                    ) {
-                        Icon(
-                            Icons.Outlined.MoreVert,
-                            contentDescription = "更多操作",
-                            tint = MaterialTheme.colorScheme.outline,
-                            modifier = Modifier.size(16.dp),
+                } else {
+                    if (synced) {
+                        Text(
+                            text = "已同步",
+                            fontSize = 10.sp,
+                            color = Color(0xFF48B59B),
                         )
+                        Spacer(modifier = Modifier.width(4.dp))
                     }
-                    DropdownMenu(
-                        expanded = menuOpen,
-                        onDismissRequest = { menuOpen = false },
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("编辑") },
-                            onClick = {
-                                menuOpen = false
-                                onEdit()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (synced) "已同步到日历" else "同步到日历") },
-                            enabled = !synced,
-                            onClick = {
-                                menuOpen = false
-                                onSync()
-                            },
-                        )
-                        DropdownMenuItem(
-                            text = { Text("删除") },
-                            onClick = {
-                                menuOpen = false
-                                onDelete()
-                            },
-                        )
+                    Box {
+                        IconButton(
+                            onClick = { menuOpen = true },
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Icon(
+                                Icons.Outlined.MoreVert,
+                                contentDescription = "更多操作",
+                                tint = MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuOpen,
+                            onDismissRequest = { menuOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("编辑") },
+                                onClick = {
+                                    menuOpen = false
+                                    onEdit?.invoke()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text(if (synced) "已同步到日历" else "同步到日历") },
+                                enabled = !synced,
+                                onClick = {
+                                    menuOpen = false
+                                    onSync?.invoke()
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("删除") },
+                                onClick = {
+                                    menuOpen = false
+                                    onDelete?.invoke()
+                                },
+                            )
+                        }
                     }
                 }
             }
             Text(
-                text = "${formatDuration(session.durationMs)} · 至 ${formatTimeOfDay(session.endTimeMs)}",
+                text = "${formatDuration(endMs - startMs)} · 至 ${formatTimeOfDay(endMs)}",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 1.dp),

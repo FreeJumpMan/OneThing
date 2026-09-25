@@ -56,4 +56,29 @@ object IntervalMerger {
             val end = minOf(interval.endMs, toMs)
             if (end > start) TimeInterval(start, end) else null
         }
+
+    /**
+     * 从 intervals 中减去 cut 覆盖的部分（差集），返回剩余区间。
+     * 用于展示层去重：自动记录中与手动记录重叠的时段不再重复展示。
+     */
+    fun subtract(intervals: List<TimeInterval>, cut: List<TimeInterval>): List<TimeInterval> {
+        if (cut.isEmpty()) return intervals.filter { it.endMs > it.startMs }
+        val cuts = cut.filter { it.endMs > it.startMs }.sortedBy { it.startMs }
+        val result = mutableListOf<TimeInterval>()
+        for (interval in intervals) {
+            if (interval.endMs <= interval.startMs) continue
+            var cursor = interval.startMs
+            for (c in cuts) {
+                if (c.endMs <= cursor) continue
+                if (c.startMs >= interval.endMs) break
+                if (c.startMs > cursor) {
+                    result += TimeInterval(cursor, minOf(c.startMs, interval.endMs))
+                }
+                cursor = maxOf(cursor, c.endMs)
+                if (cursor >= interval.endMs) break
+            }
+            if (cursor < interval.endMs) result += TimeInterval(cursor, interval.endMs)
+        }
+        return result
+    }
 }

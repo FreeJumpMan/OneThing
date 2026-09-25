@@ -7,6 +7,7 @@ import com.example.focus.data.db.AppCategoryRule
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.ProductivityLevel
 import com.example.focus.data.db.TimeCategory
+import com.example.focus.data.prefs.SettingsStore
 import com.example.focus.data.usage.AppUsageItem
 import com.example.focus.data.usage.DefaultCategoryRules
 import com.example.focus.data.usage.UsageStatsRepository
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -32,6 +34,7 @@ class CategorySettingsViewModel(application: Application) : AndroidViewModel(app
     private val categoryDao = db.timeCategoryDao()
     private val ruleDao = db.appCategoryRuleDao()
     private val usageRepo = UsageStatsRepository(application)
+    private val settingsStore = SettingsStore(application)
 
     /** 分类列表（带已配置 App 数量） */
     val categories: StateFlow<List<CategoryWithCount>> =
@@ -97,13 +100,20 @@ class CategorySettingsViewModel(application: Application) : AndroidViewModel(app
         }
     }
 
-    /** 删除分类：同时清掉指向它的用户规则（那些 App 会回到内置默认归类） */
+    /**
+     * 删除分类：同时清掉指向它的用户规则（那些 App 会回到内置默认归类），
+     * 以及日历同步排除集合里的旧 id（否则设置页的「N 个已开启」会虚低）。
+     */
     fun deleteCategory(category: TimeCategory) {
         viewModelScope.launch {
             ruleDao.getAll()
                 .filter { it.categoryId == category.id }
                 .forEach { ruleDao.delete(it.packageName) }
             categoryDao.delete(category)
+
+            val id = category.id.toString()
+            val excluded = settingsStore.settings.first().excludedCalendarCategories
+            if (id in excluded) settingsStore.setExcludedCalendarCategories(excluded - id)
         }
     }
 

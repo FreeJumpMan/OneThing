@@ -31,6 +31,7 @@ import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -59,10 +60,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.focus.data.backup.BackupCheck
+import com.example.focus.data.backup.BackupSummary
+import com.example.focus.data.prefs.AppSettings
 import com.example.focus.data.prefs.ThemeMode
 import com.example.focus.ui.parseHexColor
 import kotlinx.coroutines.launch
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * 设置页：集中管理权限、记录规则、数据备份与外观。
@@ -86,7 +93,12 @@ fun SettingsScreen(
     var showToleranceDialog by remember { mutableStateOf(false) }
     var showCategorySyncDialog by remember { mutableStateOf(false) }
     var showColorDialog by remember { mutableStateOf(false) }
-    var showImportConfirm by remember { mutableStateOf(false) }
+    var showAutoBackupDialog by remember { mutableStateOf(false) }
+
+    // 导入流程：选定文件、体检通过后，拿摘要给用户确认（导入是破坏性操作）
+    var pendingImportJson by remember { mutableStateOf<String?>(null) }
+    var pendingSummary by remember { mutableStateOf<BackupSummary?>(null) }
+    var keepCalendarMappings by remember { mutableStateOf(true) }
 
     // 从系统设置返回时刷新权限状态
     DisposableEffect(lifecycleOwner) {
@@ -119,21 +131,45 @@ fun SettingsScreen(
         }
     }
 
+    // 选好文件后先体检：确认是「一事」的备份、版本可读，再弹确认框
     val importLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val json = runCatching {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                }.getOrNull() ?: ""
-                val error = viewModel.restoreFromJson(json)
-                Toast.makeText(
-                    context,
-                    if (error == null) "数据已恢复" else "导入失败：$error",
-                    Toast.LENGTH_LONG,
-                ).show()
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val json = runCatching {
+                context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+            }.getOrNull().orEmpty()
+            if (json.isBlank()) {
+                Toast.makeText(context, "读取文件失败", Toast.LENGTH_LONG).show()
+                return@launch
             }
+            when (val check = viewModel.checkBackup(json)) {
+                is BackupCheck.Invalid -> Toast.makeText(
+                    context, "无法导入：${check.message}", Toast.LENGTH_LONG,
+                ).show()
+
+                is BackupCheck.Valid -> {
+                    pendingImportJson = json
+                    pendingSummary = check.summary
+                    keepCalendarMappings = true
+                }
+            }
+        }
+    }
+
+    // 选完目录立刻备一份，验证目录真能写
+    val backupDirLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            val ok = viewModel.enableAutoBackup(uri)
+            Toast.makeText(
+                context,
+                if (ok) "已开启自动备份" else "这个目录写不进去，换一个试试",
+                Toast.LENGTH_LONG,
+            ).show()
         }
     }
 
@@ -252,7 +288,16 @@ fun SettingsScreen(
                 SettingRow(
                     title = "同步的分类",
                     subtitle = "选择哪些分类的时间块写入日历",
-                    value = "${categories.size - settings.excludedCalendarCategories.size} 个已开启",
+                    // 按分类实际个数数，不用「总数 - 排除集合大小」：
+                    // 排除集合里可能残留已删除分类的旧 id（v1.7 分类疗身就会留下），
+                    // 相减会把数字算歪；分类还没加载完时也不应该出现负数
+                    value = if (categories.isEmpty()) {
+                        "—"
+                    } else {
+                        val enabled =
+                            categories.count { it.id.toString() !in settings.excludedCalendarCategories }
+                        "$enabled 个已开启"
+                    },
                     onClick = { showCategorySyncDialog = true },
                 )
             }
@@ -295,7 +340,7 @@ fun SettingsScreen(
             SettingsSection("数据") {
                 SettingRow(
                     title = "备份数据",
-                    subtitle = "导出为 JSON 文件（专注记录、事项、日历映射）",
+                    subtitle = "导出为 JSON 文件（记录、事项、分类与设置）",
                     value = "导出",
                     onClick = {
                         exportLauncher.launch("一事备份_${LocalDate.now()}.json")
@@ -305,7 +350,15 @@ fun SettingsScreen(
                     title = "恢复数据",
                     subtitle = "从备份文件导入，会覆盖当前数据",
                     value = "导入",
-                    onClick = { showImportConfirm = true },
+                    onClick = {
+                        importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                    },
+                )
+                SettingRow(
+                    title = "自动备份",
+                    subtitle = autoBackupSubtitle(settings),
+                    value = if (settings.autoBackupDir == null) "关闭" else "已开启",
+                    onClick = { showAutoBackupDialog = true },
                 )
             }
         }
@@ -330,7 +383,12 @@ fun SettingsScreen(
             SettingsSection("关于") {
                 SettingRow(
                     title = "版本",
-                    value = "1.4",
+                    value = remember(context) {
+                        runCatching {
+                            context.packageManager
+                                .getPackageInfo(context.packageName, 0).versionName
+                        }.getOrNull() ?: "—"
+                    },
                     onClick = null,
                 )
             }
@@ -502,22 +560,170 @@ fun SettingsScreen(
         )
     }
 
-    // 导入确认
-    if (showImportConfirm) {
+    // 自动备份
+    if (showAutoBackupDialog) {
         AlertDialog(
-            onDismissRequest = { showImportConfirm = false },
-            title = { Text("恢复数据？") },
-            text = { Text("导入将替换当前所有数据（专注记录、事项、日历映射）。建议先备份当前数据。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showImportConfirm = false
-                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                }) { Text("选择文件") }
+            onDismissRequest = { showAutoBackupDialog = false },
+            title = { Text("自动备份") },
+            text = {
+                Column {
+                    Text(
+                        text = if (settings.autoBackupDir == null) {
+                            "选一个目录，之后每次专注结束、每天首次打开 App，都会把全部数据写一份 JSON 到那里。"
+                        } else {
+                            "目录：${settings.autoBackupDirName ?: "已选目录"}\n" +
+                                "按日期命名，只保留最近 7 份。"
+                        },
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    DialogOption(
+                        text = if (settings.autoBackupDir == null) "选择备份目录" else "更换备份目录",
+                        selected = false,
+                        onClick = {
+                            showAutoBackupDialog = false
+                            backupDirLauncher.launch(null)
+                        },
+                    )
+                    if (settings.autoBackupDir != null) {
+                        DialogOption(
+                            text = "立即备份一次",
+                            selected = false,
+                            onClick = {
+                                showAutoBackupDialog = false
+                                scope.launch {
+                                    val ok = viewModel.backupNow()
+                                    Toast.makeText(
+                                        context,
+                                        if (ok) "已备份" else "备份失败，请重新选择目录",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            },
+                        )
+                        DialogOption(
+                            text = "关闭自动备份",
+                            selected = false,
+                            onClick = {
+                                showAutoBackupDialog = false
+                                scope.launch { viewModel.disableAutoBackup() }
+                            },
+                        )
+                    }
+                }
             },
-            dismissButton = {
-                TextButton(onClick = { showImportConfirm = false }) { Text("取消") }
+            confirmButton = {
+                TextButton(onClick = { showAutoBackupDialog = false }) { Text("关闭") }
             },
         )
+    }
+
+    pendingSummary?.let { summary ->
+        AlertDialog(
+            onDismissRequest = {
+                pendingImportJson = null
+                pendingSummary = null
+            },
+            title = { Text("恢复这份备份？") },
+            text = {
+                Column {
+                    Text(
+                        text = "导出于 ${summary.exportedAt}",
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = buildString {
+                            append("专注记录 ${summary.sessionCount} 条 · 事项 ${summary.todoCount} 个\n")
+                            append("时间分类 ${summary.categoryCount} 个 · 规则 ${summary.ruleCount} 条\n")
+                            append("专注 App ${summary.focusAppCount} 个 · 日历映射 ${summary.calendarMappingCount} 条")
+                        },
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "将覆盖当前的记录、事项与设置，建议先备份当前数据。",
+                        fontSize = 13.sp,
+                        lineHeight = 19.sp,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { keepCalendarMappings = !keepCalendarMappings },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = keepCalendarMappings,
+                            onCheckedChange = { keepCalendarMappings = it },
+                        )
+                        Column {
+                            Text(
+                                text = "同时恢复日历同步映射",
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp,
+                            )
+                            Text(
+                                text = "同一台手机重装请保留；换到新手机（日历里没有原来写入的事件）请取消",
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val json = pendingImportJson
+                    pendingImportJson = null
+                    pendingSummary = null
+                    if (json == null) return@TextButton
+                    scope.launch {
+                        val error = viewModel.restoreFromJson(json, keepCalendarMappings)
+                        Toast.makeText(
+                            context,
+                            if (error == null) "数据已恢复" else "导入失败：$error",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
+                }) { Text("导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pendingImportJson = null
+                    pendingSummary = null
+                }) { Text("取消") }
+            },
+        )
+    }
+}
+
+/** 自动备份那行的副标题：目录名 + 上一次备份的时间/状态 */
+private fun autoBackupSubtitle(settings: AppSettings): String {
+    if (settings.autoBackupDir == null) {
+        return "每次专注结束、每天首次打开时自动存一份到指定目录"
+    }
+    val state = when {
+        settings.lastAutoBackupAt <= 0L -> "尚未备份"
+        !settings.lastAutoBackupOk -> "上次备份失败，请重新选择目录"
+        else -> "上次备份 ${formatBackupTime(settings.lastAutoBackupAt)}"
+    }
+    return "${settings.autoBackupDirName ?: "已选目录"} · $state"
+}
+
+private fun formatBackupTime(ms: Long): String {
+    val dt = Instant.ofEpochMilli(ms).atZone(ZoneId.systemDefault())
+    val time = dt.format(DateTimeFormatter.ofPattern("HH:mm"))
+    return when (dt.toLocalDate()) {
+        LocalDate.now() -> "今天 $time"
+        LocalDate.now().minusDays(1) -> "昨天 $time"
+        else -> "${dt.toLocalDate()} $time"
     }
 }
 

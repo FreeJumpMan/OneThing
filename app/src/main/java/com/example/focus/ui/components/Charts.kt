@@ -27,10 +27,12 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
@@ -43,7 +45,6 @@ import com.example.focus.data.db.SliceStat
 import com.example.focus.ui.formatDurationCompact
 import kotlin.math.abs
 import kotlin.math.ceil
-import kotlin.math.pow
 import kotlin.math.roundToInt
 
 /**
@@ -185,15 +186,16 @@ fun PieChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
 
 /**
  * 月度每日专注时长：平滑曲线 + 渐变填充 + 关键点数值标注 + Y 轴刻度 + 日期轴。
- * xAxisLabel 决定 X 轴刻度文字（日期或月份）。
+ * xAxisLabel 决定 X 轴刻度文字（日期或月份）；showAverage 额外画一条平均值虚线。
  */
 @Composable
 fun SmoothLineChart(
     data: List<SliceStat>,
     modifier: Modifier = Modifier,
     xAxisLabel: (String) -> String = ::axisDateLabel,
+    showAverage: Boolean = false,
 ) {
-    if (data.isEmpty()) {
+    if (data.isEmpty() || data.all { it.totalMs == 0L }) {
         EmptyHint()
         return
     }
@@ -207,15 +209,10 @@ fun SmoothLineChart(
     val gridColor = MaterialTheme.colorScheme.outlineVariant
 
     val maxMinutes = data.maxOf { it.totalMs }.toFloat() / 60_000f
-    val yMax = niceCeil(maxMinutes.coerceAtLeast(1f))
+    val (yMax, yStep) = niceAxis(maxMinutes.coerceAtLeast(1f))
 
-    // 数值标签：有值的点，太多则只标最大的 5 个，避免拥挤
+    // 数值标签的候选点：所有有值的点，最终由「避让」决定哪些真的画得下
     val nonZeroIndices = data.indices.filter { data[it].totalMs > 0 }
-    val labeledIndices: Set<Int> = if (nonZeroIndices.size <= 6) {
-        nonZeroIndices.toSet()
-    } else {
-        nonZeroIndices.sortedByDescending { data[it].totalMs }.take(5).toSet()
-    }
 
     Canvas(
         modifier = modifier
@@ -232,15 +229,17 @@ fun SmoothLineChart(
 
         fun yOf(minutes: Float): Float = topPad + chartH * (1f - (minutes / yMax))
 
-        listOf(yMax, yMax * 2f / 3f, yMax / 3f, 0f).forEach { value ->
-            val y = yOf(value)
+        // Y 轴刻度线 + 标签（步长取整档，单位按量级切分钟/小时）
+        var tick = 0f
+        while (tick <= yMax + 0.5f) {
+            val y = yOf(tick)
             drawLine(
                 color = gridColor,
                 start = Offset(leftPad, y),
                 end = Offset(size.width, y),
                 strokeWidth = 1f,
             )
-            val layout = textMeasurer.measure(AnnotatedString(yAxisLabel(value)), labelStyle)
+            val layout = textMeasurer.measure(AnnotatedString(yAxisLabel(tick, yStep)), labelStyle)
             drawText(
                 textLayoutResult = layout,
                 topLeft = Offset(
@@ -248,6 +247,7 @@ fun SmoothLineChart(
                     y = y - layout.size.height / 2f,
                 ),
             )
+            tick += yStep
         }
 
         val points = data.mapIndexed { index, slice ->
@@ -265,7 +265,7 @@ fun SmoothLineChart(
             drawPath(
                 path = fillPath,
                 brush = Brush.verticalGradient(
-                    colors = listOf(lineColor.copy(alpha = 0.30f), lineColor.copy(alpha = 0.02f)),
+                    colors = listOf(lineColor.copy(alpha = 0.16f), lineColor.copy(alpha = 0.01f)),
                     startY = topPad,
                     endY = topPad + chartH,
                 ),
@@ -281,24 +281,73 @@ fun SmoothLineChart(
             )
         }
 
+        // 平均线：一条很淡的虚线，给出「今天跟自己的平均比」的参照
+        if (showAverage) {
+            val avgMinutes = (data.sumOf { it.totalMs }.toFloat() / data.size) / 60_000f
+            if (avgMinutes > 0f) {
+                val y = yOf(avgMinutes)
+                drawLine(
+                    color = lineColor.copy(alpha = 0.45f),
+                    start = Offset(leftPad, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = 1.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(7f, 7f)),
+                )
+                val avgLayout = textMeasurer.measure(
+                    AnnotatedString(
+                        "平均 ${formatDurationCompact((avgMinutes * 60_000f).toLong())}"
+                    ),
+                    labelStyle.copy(color = lineColor.copy(alpha = 0.85f)),
+                )
+                drawText(
+                    textLayoutResult = avgLayout,
+                    topLeft = Offset(
+                        x = (size.width - avgLayout.size.width).coerceAtLeast(leftPad),
+                        y = (y - avgLayout.size.height - 2.dp.toPx()).coerceAtLeast(0f),
+                    ),
+                )
+            }
+        }
+
         points.forEachIndexed { index, point ->
             if (data[index].totalMs > 0) {
                 drawCircle(Color.White, radius = 5.dp.toPx(), center = point)
                 drawCircle(lineColor, radius = 3.5.dp.toPx(), center = point)
-                if (index in labeledIndices) {
-                    val layout = textMeasurer.measure(
-                        AnnotatedString(formatDurationCompact(data[index].totalMs)),
-                        labelStyle.copy(color = lineColor),
-                    )
-                    drawText(
-                        textLayoutResult = layout,
-                        topLeft = Offset(
-                            x = (point.x - layout.size.width / 2f)
-                                .coerceIn(0f, size.width - layout.size.width),
-                            y = (point.y - layout.size.height - 8.dp.toPx()).coerceAtLeast(0f),
-                        ),
-                    )
-                }
+            }
+        }
+
+        // 数值标签：最高点优先占位，其余按 x 从左到右，跟前一个挤上就跳过（避免叠字）
+        run {
+            val gapPx = 6.dp.toPx()
+            val occupied = mutableListOf<Pair<Float, Float>>()
+            val toDraw = mutableListOf<Triple<Int, TextLayoutResult, Float>>()
+
+            fun placeLabel(index: Int) {
+                val layout = textMeasurer.measure(
+                    AnnotatedString(formatDurationCompact(data[index].totalMs)),
+                    labelStyle.copy(color = lineColor),
+                )
+                val x = (points[index].x - layout.size.width / 2f)
+                    .coerceIn(0f, size.width - layout.size.width)
+                val left = x - gapPx
+                val right = x + layout.size.width + gapPx
+                if (occupied.any { left < it.second && right > it.first }) return
+                occupied += left to right
+                toDraw += Triple(index, layout, x)
+            }
+
+            val peakIndex = nonZeroIndices.maxByOrNull { data[it].totalMs }
+            peakIndex?.let { placeLabel(it) }
+            nonZeroIndices.forEach { if (it != peakIndex) placeLabel(it) }
+
+            toDraw.forEach { (index, layout, x) ->
+                drawText(
+                    textLayoutResult = layout,
+                    topLeft = Offset(
+                        x = x,
+                        y = (points[index].y - layout.size.height - 8.dp.toPx()).coerceAtLeast(0f),
+                    ),
+                )
             }
         }
 
@@ -320,11 +369,15 @@ fun SmoothLineChart(
 }
 
 /**
- * 时段分布柱状图：顶部圆角柱 + 柱顶数值 + Y 轴刻度（分钟）+ X 轴小时标签。
- * data 需要是连续槽位（缺失小时补 0），label 为小时数字字符串。
+ * 柱状图：顶部圆角柱 + Y 轴刻度（按量级自动切分钟/小时）+ X 轴标签。
+ * 只给最高的一根标数值，量级交给 Y 轴；data 需要是连续槽位（缺失的补 0）。
  */
 @Composable
-fun HourBarChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
+fun BarChart(
+    data: List<SliceStat>,
+    modifier: Modifier = Modifier,
+    xAxisLabel: (String) -> String = ::axisHourLabel,
+) {
     if (data.isEmpty() || data.all { it.totalMs == 0L }) {
         EmptyHint()
         return
@@ -340,6 +393,7 @@ fun HourBarChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
 
     val maxMinutes = data.maxOf { it.totalMs }.toFloat() / 60_000f
     val (yMax, step) = niceAxis(maxMinutes.coerceAtLeast(1f))
+    val peakMs = data.maxOf { it.totalMs }
 
     Canvas(
         modifier = modifier
@@ -357,8 +411,8 @@ fun HourBarChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
 
         fun yOf(minutes: Float): Float = topPad + chartH * (1f - (minutes / yMax))
 
-        // Y 轴刻度线 + 标签
-        var tick = step
+        // Y 轴刻度线 + 标签（按量级自动切分钟/小时）
+        var tick = 0f
         while (tick <= yMax + 0.5f) {
             val y = yOf(tick)
             drawLine(
@@ -368,7 +422,7 @@ fun HourBarChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
                 strokeWidth = 1f,
             )
             val layout = textMeasurer.measure(
-                AnnotatedString("${tick.roundToInt()}分钟"),
+                AnnotatedString(yAxisLabel(tick, step)),
                 labelStyle,
             )
             drawText(
@@ -381,7 +435,7 @@ fun HourBarChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
             tick += step
         }
 
-        // 柱体（顶部圆角）+ 柱顶数值
+        // 柱体（顶部圆角）；只给最高的一根标数值
         data.forEachIndexed { index, slice ->
             val minutes = slice.totalMs / 60_000f
             if (minutes > 0f) {
@@ -401,27 +455,28 @@ fun HourBarChart(data: List<SliceStat>, modifier: Modifier = Modifier) {
                 }
                 drawPath(path = barPath, color = barColor)
 
-                val layout = textMeasurer.measure(
-                    AnnotatedString("${minutes.roundToInt()}"),
-                    labelStyle.copy(color = barColor),
-                )
-                drawText(
-                    textLayoutResult = layout,
-                    topLeft = Offset(
-                        x = (left + barWidth / 2f - layout.size.width / 2f)
-                            .coerceIn(0f, size.width - layout.size.width),
-                        y = (top - layout.size.height - 4.dp.toPx()).coerceAtLeast(0f),
-                    ),
-                )
+                if (slice.totalMs == peakMs) {
+                    val layout = textMeasurer.measure(
+                        AnnotatedString(formatDurationCompact(slice.totalMs)),
+                        labelStyle.copy(color = barColor),
+                    )
+                    drawText(
+                        textLayoutResult = layout,
+                        topLeft = Offset(
+                            x = (left + barWidth / 2f - layout.size.width / 2f)
+                                .coerceIn(0f, size.width - layout.size.width),
+                            y = (top - layout.size.height - 4.dp.toPx()).coerceAtLeast(0f),
+                        ),
+                    )
+                }
             }
         }
 
-        // X 轴小时标签（密集时隔一个标）
+        // X 轴标签（密集时隔一个标）
         data.forEachIndexed { index, slice ->
             val show = n <= 8 || index % 2 == 0
             if (show) {
-                val hour = slice.label.toIntOrNull() ?: return@forEachIndexed
-                val layout = textMeasurer.measure(AnnotatedString("${hour}点"), labelStyle)
+                val layout = textMeasurer.measure(AnnotatedString(xAxisLabel(slice.label)), labelStyle)
                 val x = (leftPad + index * slot + slot / 2f - layout.size.width / 2f)
                     .coerceIn(0f, size.width - layout.size.width)
                 drawText(
@@ -452,36 +507,37 @@ private fun buildSmoothPath(points: List<Offset>): Path {
     return path
 }
 
-/** Y 轴最大值向上取整到 1/2/3/5 × 10^n */
-private fun niceCeil(value: Float): Float {
-    if (value <= 0f) return 1f
-    val exp = kotlin.math.floor(kotlin.math.log10(value.toDouble())).toInt()
-    val base = 10.0.pow(exp).toFloat()
-    val normalized = value / base
-    val nice = when {
-        normalized <= 1f -> 1f
-        normalized <= 2f -> 2f
-        normalized <= 3f -> 3f
-        normalized <= 5f -> 5f
-        else -> 10f
-    }
-    return nice * base
-}
+/**
+ * 时间轴刻度：返回（最大值, 步长）。步长取自「好读的时间档位」（5 分 ~ 10 天），
+ * 选贴近 maxValue/4 的那一档，让刻度线落在 4 根左右。
+ */
+private val AXIS_STEPS_MINUTES = listOf(
+    5f, 10f, 15f, 30f, 60f, 120f, 180f, 240f, 360f, 480f, 720f,
+    1440f, 2160f, 2880f, 4320f, 7200f, 14400f,
+)
 
-/** 柱状图 Y 轴：返回（最大值, 刻度步长），步长取自常用时间档位 */
 private fun niceAxis(maxValue: Float): Pair<Float, Float> {
-    val candidates = listOf(5f, 10f, 15f, 20f, 30f, 60f, 90f, 120f, 180f, 240f, 300f, 600f)
-    val target = (maxValue / 5f).coerceAtLeast(1f)
-    val step = candidates.minByOrNull { abs(it - target) } ?: target
+    if (maxValue <= 0f) return 1f to 1f
+    val target = maxValue / 4f
+    val step = AXIS_STEPS_MINUTES.minByOrNull { abs(it - target) } ?: target
     val ticks = ceil(maxValue / step).toInt().coerceAtLeast(2)
     return step * ticks to step
 }
 
-/** Y 轴刻度文字：300分 / 12h */
-private fun yAxisLabel(minutes: Float): String = when {
-    minutes <= 0f -> "0"
-    minutes >= 600f -> "${(minutes / 60f).roundToInt()}h"
-    else -> "${minutes.roundToInt()}分"
+/**
+ * Y 轴刻度文字。单位按整条轴的步长决定，避免同一根轴上混着「30分」和「1h」：
+ * 步长是整小时 → 全用小时（2h / 4h）；否则用分钟（30分 / 90分）。
+ */
+private fun yAxisLabel(minutes: Float, stepMinutes: Float): String {
+    if (minutes <= 0f) return "0"
+    val useHours = stepMinutes >= 60f && stepMinutes % 60f == 0f
+    return if (useHours) "${(minutes / 60f).roundToInt()}h" else "${minutes.roundToInt()}分"
+}
+
+/** X 轴小时："09" → "9点" */
+private fun axisHourLabel(label: String): String {
+    val hour = label.toIntOrNull() ?: return label
+    return "${hour}点"
 }
 
 /** X 轴日期："2026-08-27" → "8-27" */

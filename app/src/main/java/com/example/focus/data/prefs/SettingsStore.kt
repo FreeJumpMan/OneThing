@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -35,6 +36,14 @@ data class AppSettings(
     val autoSyncAppUsage: Boolean = false,
     /** 「一事 · 时间记录」专属日历的颜色（ARGB） */
     val timelineCalendarColor: Int = 0xFF48B59B.toInt(),
+    /** 自动备份目录（SAF 树 URI 字符串）；null = 未开启 */
+    val autoBackupDir: String? = null,
+    /** 自动备份目录的显示名（仅用于设置页展示） */
+    val autoBackupDirName: String? = null,
+    /** 上一次自动备份的时间戳，0 = 从未备份过 */
+    val lastAutoBackupAt: Long = 0L,
+    /** 上一次自动备份是否成功（目录被删/权限失效时为 false） */
+    val lastAutoBackupOk: Boolean = true,
 )
 
 /**
@@ -50,6 +59,10 @@ class SettingsStore(private val context: Context) {
         val AUTO_SYNC_CALENDAR = booleanPreferencesKey("auto_sync_calendar")
         val AUTO_SYNC_APP_USAGE = booleanPreferencesKey("auto_sync_app_usage")
         val TIMELINE_CALENDAR_COLOR = intPreferencesKey("timeline_calendar_color")
+        val AUTO_BACKUP_DIR = stringPreferencesKey("auto_backup_dir")
+        val AUTO_BACKUP_DIR_NAME = stringPreferencesKey("auto_backup_dir_name")
+        val LAST_AUTO_BACKUP_AT = longPreferencesKey("last_auto_backup_at")
+        val LAST_AUTO_BACKUP_OK = booleanPreferencesKey("last_auto_backup_ok")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
@@ -62,6 +75,10 @@ class SettingsStore(private val context: Context) {
             autoSyncCalendar = prefs[Keys.AUTO_SYNC_CALENDAR] ?: false,
             autoSyncAppUsage = prefs[Keys.AUTO_SYNC_APP_USAGE] ?: false,
             timelineCalendarColor = prefs[Keys.TIMELINE_CALENDAR_COLOR] ?: 0xFF48B59B.toInt(),
+            autoBackupDir = prefs[Keys.AUTO_BACKUP_DIR],
+            autoBackupDirName = prefs[Keys.AUTO_BACKUP_DIR_NAME],
+            lastAutoBackupAt = prefs[Keys.LAST_AUTO_BACKUP_AT] ?: 0L,
+            lastAutoBackupOk = prefs[Keys.LAST_AUTO_BACKUP_OK] ?: true,
         )
     }
 
@@ -87,5 +104,45 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setTimelineCalendarColor(color: Int) {
         context.settingsDataStore.edit { it[Keys.TIMELINE_CALENDAR_COLOR] = color }
+    }
+
+    /**
+     * 设置自动备份目录（null = 关闭自动备份）。
+     * 目录 URI 与显示名一起存，避免设置页展示时再去查一次 DocumentsProvider。
+     */
+    suspend fun setAutoBackupDir(dir: String?, dirName: String?) {
+        context.settingsDataStore.edit { prefs ->
+            if (dir == null) {
+                prefs.remove(Keys.AUTO_BACKUP_DIR)
+                prefs.remove(Keys.AUTO_BACKUP_DIR_NAME)
+            } else {
+                prefs[Keys.AUTO_BACKUP_DIR] = dir
+                if (dirName != null) prefs[Keys.AUTO_BACKUP_DIR_NAME] = dirName
+            }
+        }
+    }
+
+    /** 记录一次备份结果（成功与否都记，好在设置页如实显示） */
+    suspend fun setLastAutoBackup(atMs: Long, ok: Boolean) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.LAST_AUTO_BACKUP_AT] = atMs
+            prefs[Keys.LAST_AUTO_BACKUP_OK] = ok
+        }
+    }
+
+    /**
+     * 用一份设置整体覆盖当前设置（备份恢复用）。
+     * 逐项写入而不是替换整个 DataStore，避免抹掉将来可能新增的其他键。
+     * 注意：自动备份目录属于「本机环境」，不随备份迁移，所以不在这里恢复。
+     */
+    suspend fun replaceAll(settings: AppSettings) {
+        context.settingsDataStore.edit { prefs ->
+            prefs[Keys.THEME_MODE] = settings.themeMode.name
+            prefs[Keys.SWITCH_TOLERANCE_MINUTES] = settings.switchToleranceMinutes
+            prefs[Keys.EXCLUDED_CALENDAR_CATEGORIES] = settings.excludedCalendarCategories
+            prefs[Keys.AUTO_SYNC_CALENDAR] = settings.autoSyncCalendar
+            prefs[Keys.AUTO_SYNC_APP_USAGE] = settings.autoSyncAppUsage
+            prefs[Keys.TIMELINE_CALENDAR_COLOR] = settings.timelineCalendarColor
+        }
     }
 }

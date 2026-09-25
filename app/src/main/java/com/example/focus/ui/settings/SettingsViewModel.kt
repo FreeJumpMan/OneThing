@@ -3,13 +3,17 @@ package com.example.focus.ui.settings
 import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.content.ContextCompat
+import com.example.focus.data.backup.AutoBackupManager
+import com.example.focus.data.backup.BackupCheck
 import com.example.focus.data.backup.BackupManager
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.FocusApp
@@ -50,7 +54,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val store = SettingsStore(application)
     private val focusAppDao = AppDatabase.get(application).focusAppDao()
     private val usageRepo = UsageStatsRepository(application)
-    private val backupManager = BackupManager(AppDatabase.get(application))
+    private val backupManager = BackupManager(AppDatabase.get(application), store)
+    private val autoBackupManager = AutoBackupManager(application, AppDatabase.get(application), store)
     private val categoryDao = AppDatabase.get(application).timeCategoryDao()
 
     val settings: StateFlow<AppSettings> = store.settings
@@ -71,6 +76,21 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     init {
         refreshPermissions()
+        pruneStaleCategoryExclusions()
+    }
+
+    /**
+     * 排除集合里可能残留已删除分类的旧 id（例如 v1.7 把 8 个分类收到 5 个时留下），
+     * 它们已经不影响同步，但会让设置页的数字和对话框里的开关对不上。启动时清一次。
+     */
+    private fun pruneStaleCategoryExclusions() {
+        viewModelScope.launch {
+            val validIds = categoryDao.getAll().map { it.id.toString() }.toSet()
+            if (validIds.isEmpty()) return@launch // 分类还没落库（首次启动），不碰
+            val excluded = store.settings.first().excludedCalendarCategories
+            val cleaned = excluded.filterTo(mutableSetOf()) { it in validIds }
+            if (cleaned != excluded) store.setExcludedCalendarCategories(cleaned)
+        }
     }
 
     fun refreshPermissions() {
@@ -162,7 +182,46 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
     suspend fun buildBackupJson(): String = backupManager.exportData()
 
-    suspend fun restoreFromJson(json: String): String? = backupManager.importData(json)
+    /** 导入前体检：校验文件归属与版本，并返回摘要供确认弹窗展示 */
+    suspend fun checkBackup(json: String): BackupCheck = backupManager.checkBackup(json)
+
+    /** 从 JSON 恢复数据，返回 null 表示成功否则为错误信息 */
+    suspend fun restoreFromJson(json: String, keepCalendarMappings: Boolean): String? =
+        backupManager.importData(json, keepCalendarMappings)
+
+    // ===== 自动备份 =====
+
+    /**
+     * 选定备份目录：持久化授权 → 记下目录 → 立刻备一份验证目录真能写。
+     * 返回 false 表示目录不可写（例如选到了只读位置），需要换一个。
+     */
+    suspend fun enableAutoBackup(uri: Uri): Boolean {
+        val ctx = getApplication<Application>()
+        // 授权在部分 ROM 上可能拒绝（如文件管理器返回不可持久化的树），失败不阻塞后续尝试
+        runCatching {
+            ctx.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }
+        val name = autoBackupManager.directoryName(uri)
+        store.setAutoBackupDir(uri.toString(), name)
+        val ok = autoBackupManager.backupNow()
+        store.setLastAutoBackup(System.currentTimeMillis(), ok)
+        return ok
+    }
+
+    /** 关闭自动备份（只清除记录，不动目录里的文件） */
+    suspend fun disableAutoBackup() {
+        store.setAutoBackupDir(null, null)
+    }
+
+    /** 手动立即备份一次 */
+    suspend fun backupNow(): Boolean {
+        val ok = autoBackupManager.backupNow()
+        store.setLastAutoBackup(System.currentTimeMillis(), ok)
+        return ok
+    }
 }
 
 // ===== 权限状态检查 =====

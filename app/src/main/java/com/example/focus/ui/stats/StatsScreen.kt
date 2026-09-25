@@ -45,7 +45,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.focus.data.db.FocusSession
 import com.example.focus.data.db.SliceStat
-import com.example.focus.ui.components.HourBarChart
+import com.example.focus.ui.components.BarChart
 import com.example.focus.ui.components.PieChart
 import com.example.focus.ui.components.SmoothLineChart
 import com.example.focus.ui.components.chartColors
@@ -99,6 +99,21 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
         val map = monthly.associateBy { it.label }
         (1..12).map { month ->
             val label = "$viewedYear-${month.toString().padStart(2, '0')}"
+            SliceStat(label, map[label]?.totalMs ?: 0L)
+        }
+    }
+
+    // 每日趋势：补齐当月每一天（无记录的日子按 0 计），
+    // 否则「多少天有记录就画几个点」，趋势形状与平均值都失真
+    val daySlots: List<SliceStat> = remember(dailyLine, viewedMonth) {
+        val map = dailyLine.associateBy { it.label }
+        val lastDay = if (viewedMonth == YearMonth.now()) {
+            LocalDate.now().dayOfMonth
+        } else {
+            viewedMonth.lengthOfMonth()
+        }
+        (1..lastDay).map { day ->
+            val label = viewedMonth.atDay(day).toString()
             SliceStat(label, map[label]?.totalMs ?: 0L)
         }
     }
@@ -266,7 +281,7 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
                 onPrev = { viewModel.prevMonth() },
                 onNext = { viewModel.nextMonth() },
             ) {
-                HourBarChart(data = hourSlots)
+                BarChart(data = hourSlots)
             }
         }
 
@@ -279,7 +294,7 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
                 onPrev = { viewModel.prevMonth() },
                 onNext = { viewModel.nextMonth() },
             ) {
-                SmoothLineChart(data = dailyLine)
+                SmoothLineChart(data = daySlots, showAverage = true)
             }
         }
 
@@ -292,7 +307,7 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
                 onPrev = { viewModel.prevYear() },
                 onNext = { viewModel.nextYear() },
             ) {
-                SmoothLineChart(
+                BarChart(
                     data = yearSlots,
                     xAxisLabel = { label ->
                         val month = label.substringAfter("-").toIntOrNull() ?: 0

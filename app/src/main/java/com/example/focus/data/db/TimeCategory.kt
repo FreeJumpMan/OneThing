@@ -67,6 +67,10 @@ interface TimeCategoryDao {
 
     @Delete
     suspend fun delete(category: TimeCategory)
+
+    /** 清空全部分类（仅备份恢复用，恢复时整表替换） */
+    @Query("DELETE FROM time_categories")
+    suspend fun clear()
 }
 
 @Dao
@@ -84,6 +88,13 @@ interface AppCategoryRuleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(rule: AppCategoryRule)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(rules: List<AppCategoryRule>)
+
     @Query("DELETE FROM app_category_rules WHERE packageName = :packageName")
     suspend fun delete(packageName: String)
+
+    /** 清空全部规则（仅备份恢复用，恢复时整表替换） */
+    @Query("DELETE FROM app_category_rules")
+    suspend fun clear()
 }

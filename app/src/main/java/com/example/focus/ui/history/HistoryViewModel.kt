@@ -3,7 +3,6 @@ package com.example.focus.ui.history
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.focus.data.backup.BackupManager
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.FocusSession
 import com.example.focus.data.prefs.SettingsStore
@@ -62,7 +61,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         AppDatabase.get(application).calendarSyncDao(),
         AppDatabase.get(application).timelineEventDao(),
     )
-    private val backupManager = BackupManager(AppDatabase.get(application))
     private val usageRepo = UsageStatsRepository(application)
     private val settingsStore = SettingsStore(application)
     private val focusAppDao = AppDatabase.get(application).focusAppDao()
@@ -385,12 +383,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     fun clearError() {
         _error.value = null
     }
-
-    /** 导出全部业务数据为 JSON 字符串 */
-    suspend fun buildBackupJson(): String = backupManager.exportData()
-
-    /** 从 JSON 恢复数据，返回 null 表示成功否则为错误信息 */
-    suspend fun restoreFromJson(json: String): String? = backupManager.importData(json)
 
     // ===== 诊断：探查国产 ROM 日历自定义字段 =====
 

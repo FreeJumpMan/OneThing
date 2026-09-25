@@ -27,6 +27,9 @@ interface FocusAppDao {
     @Query("SELECT * FROM focus_apps")
     fun observeAll(): Flow<List<FocusApp>>
 
+    @Query("SELECT * FROM focus_apps")
+    suspend fun getAllOnce(): List<FocusApp>
+
     @Query("SELECT * FROM focus_apps WHERE enabled = 1")
     suspend fun getEnabled(): List<FocusApp>
 
@@ -36,6 +39,13 @@ interface FocusAppDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(item: FocusApp)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertAll(items: List<FocusApp>)
+
     @Query("DELETE FROM focus_apps WHERE packageName = :packageName")
     suspend fun delete(packageName: String)
+
+    /** 清空全部标记（仅备份恢复用，恢复时整表替换） */
+    @Query("DELETE FROM focus_apps")
+    suspend fun clear()
 }

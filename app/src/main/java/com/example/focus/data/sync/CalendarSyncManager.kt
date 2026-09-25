@@ -232,8 +232,23 @@ class CalendarSyncManager(
         val eventId: Long
         if (existing != null) {
             val uri = ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, existing.eventId)
-            resolver.update(uri, values, null, null)
-            eventId = existing.eventId
+            val updated = resolver.update(uri, values, null, null)
+            if (updated > 0) {
+                eventId = existing.eventId
+            } else {
+                // 映射还在但事件已不在（换机恢复、或用户在系统日历里删了事件）
+                // → 不能只更新，否则这条记录永远写不进日历。重新插入并刷新映射。
+                val inserted = resolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                    ?: error("插入日历事件失败")
+                eventId = ContentUris.parseId(inserted)
+                syncDao.upsert(
+                    CalendarSync(
+                        sessionId = sessionId,
+                        eventId = eventId,
+                        eventUri = inserted.toString(),
+                    )
+                )
+            }
         } else {
             val uri = resolver.insert(CalendarContract.Events.CONTENT_URI, values)
                 ?: error("插入日历事件失败")

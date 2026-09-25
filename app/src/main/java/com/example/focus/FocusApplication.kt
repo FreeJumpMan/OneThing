@@ -8,6 +8,7 @@ import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.example.focus.data.backup.AutoBackupManager
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.FocusSession
 import com.example.focus.data.prefs.SettingsStore
@@ -22,7 +23,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 
 /**
  * 应用入口：只在**进程创建时**恢复一次未结束的计时，并写入内置时间分类。
@@ -44,11 +48,55 @@ class FocusApplication : Application() {
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var lastAutoSyncAtMs = 0L
 
+    /** 自动备份的互斥锁：启动时的每日备份与专注结束时的备份不可能同时写 */
+    private val backupMutex = Mutex()
+
     override fun onCreate() {
         super.onCreate()
         seedDefaultCategories()
         restoreTimerIfNeeded()
         syncTodayToCalendarIfEnabled()
+        autoBackupDailyIfNeeded()
+    }
+
+    // ===== 自动备份（目录由用户在设置里挑选，SAF 树 URI） =====
+
+    /** 每天首次打开 App 时补一次；上一次失败的话当天会重试 */
+    fun autoBackupDailyIfNeeded() {
+        appScope.launch {
+            runCatching {
+                val settings = SettingsStore(this@FocusApplication).settings.first()
+                if (settings.autoBackupDir == null) return@launch
+                val lastDay = if (settings.lastAutoBackupAt > 0L) {
+                    Instant.ofEpochMilli(settings.lastAutoBackupAt)
+                        .atZone(ZoneId.systemDefault()).toLocalDate().toString()
+                } else {
+                    null
+                }
+                if (settings.lastAutoBackupOk && lastDay == LocalDate.now().toString()) return@launch
+                runBackup()
+            }
+        }
+    }
+
+    /**
+     * 一次专注刚结束，是数据最该落盘的时刻，所以这里不做节流。
+     * 同一天多次结束只是覆盖同一个当天文件。
+     */
+    fun autoBackupOnSessionEnd() {
+        appScope.launch { runCatching { runBackup() } }
+    }
+
+    private suspend fun runBackup() {
+        if (!backupMutex.tryLock()) return // 已有一份备份在写，跳过这一次
+        try {
+            val store = SettingsStore(this)
+            if (store.settings.first().autoBackupDir == null) return
+            val ok = AutoBackupManager(this, AppDatabase.get(this), store).backupNow()
+            store.setLastAutoBackup(System.currentTimeMillis(), ok)
+        } finally {
+            backupMutex.unlock()
+        }
     }
 
     /**

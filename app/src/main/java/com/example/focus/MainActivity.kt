@@ -55,5 +55,7 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         // 回到前台时补一次日历自动同步（内部有 15 分钟节流）
         (application as? FocusApplication)?.syncTodayToCalendarIfEnabled()
+        // 以及每天的自动备份（内部判断今天是否已备过）
+        (application as? FocusApplication)?.autoBackupDailyIfNeeded()
     }
 }

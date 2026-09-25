@@ -400,6 +400,8 @@ class TimerService : Service() {
                 store.clear()
                 // 自动同步跑在 Application 的 scope 里（服务即将 stopSelf，自身 scope 会被取消）
                 (application as? FocusApplication)?.autoSyncToCalendar(session, sessionId)
+                // 专注结束顺带写一份自动备份（未开启则内部直接返回）
+                (application as? FocusApplication)?.autoBackupOnSessionEnd()
             }
         }
         TimerStateHolder.reset()

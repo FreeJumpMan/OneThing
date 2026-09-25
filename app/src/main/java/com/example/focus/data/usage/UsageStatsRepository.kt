@@ -408,8 +408,12 @@ class UsageStatsRepository(private val context: Context) {
                 pausedType, UsageEvents.Event.ACTIVITY_STOPPED -> closeInterval(pkg, event.timeStamp)
             }
         }
-        // 查询窗口结束时仍在前台的
-        openAt.keys.toList().forEach { pkg -> closeInterval(pkg, end) }
+        // 查询窗口的收尾：仍在前台的 App 截止到「当前时刻」，而不是窗口末尾。
+        // 窗口末尾对今天来说是次日 0 点，直接用它会把「正在使用」算成一直用到明天 0 点，
+        // 时间轴上就多出一条延伸到未来的块，同步到日历后就是一个横跨到 0 点的事件。
+        // 与 loadFocusUsageSegments 保持同一口径。
+        val closeAt = minOf(end, System.currentTimeMillis())
+        openAt.keys.toList().forEach { pkg -> closeInterval(pkg, closeAt) }
 
         raw.sortedBy { it.startMs }
     }

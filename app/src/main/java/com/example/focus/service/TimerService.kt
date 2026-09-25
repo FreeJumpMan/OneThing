@@ -283,10 +283,10 @@ class TimerService : Service() {
         super.onDestroy()
     }
 
-    /** 把应用图标转成位图，用作锁屏媒体卡片的封面 */
+    /** 把应用图标转成位图，用作锁屏媒体卡片的封面（资源名见 manifest 里的说明） */
     private fun loadAppIcon(): android.graphics.Bitmap? = runCatching {
         val drawable = androidx.core.content.res.ResourcesCompat.getDrawable(
-            resources, R.mipmap.ic_launcher_yishi, null,
+            resources, R.mipmap.ic_launcher_yishi_v2, null,
         ) ?: return null
         val size = 256
         val bitmap = android.graphics.Bitmap.createBitmap(

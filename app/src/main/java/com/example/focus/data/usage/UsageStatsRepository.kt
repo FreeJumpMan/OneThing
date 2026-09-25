@@ -106,13 +106,13 @@ class UsageStatsRepository(private val context: Context) {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    /** 某天各 App 的使用时长，按由多到少排序（含图标） */
+    /** 某天各 App 的使用时长，按由多到少排序（含图标）。不含桌面与「一事」自己。 */
     suspend fun loadDay(date: LocalDate): List<AppUsageItem> = withContext(Dispatchers.IO) {
         val zone = ZoneId.systemDefault()
         val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
         val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val pm = context.packageManager
-        val homePackages = homePackages(pm)
+        val skipPackages = excludedPackages(pm)
 
         queryStats(start, end)
             .groupBy { it.packageName }
@@ -120,8 +120,8 @@ class UsageStatsRepository(private val context: Context) {
                 val total = list.sumOf { it.totalTimeInForeground }
                 // 不足 1 分钟不展示，避免排行被秒级碎片刷屏
                 if (total < MIN_DISPLAY_MS) return@mapNotNull null
-                // 桌面不算「使用」（与系统数字健康口径一致）
-                if (pkg in homePackages) return@mapNotNull null
+                // 桌面与「一事」自己不算「使用」（与系统数字健康口径一致）
+                if (pkg in skipPackages) return@mapNotNull null
                 val label = appLabel(pm, pkg) ?: return@mapNotNull null
                 AppUsageItem(pkg, label, total, loadIcon(pkg))
             }
@@ -137,27 +137,27 @@ class UsageStatsRepository(private val context: Context) {
         val start = startDate.atStartOfDay(zone).toInstant().toEpochMilli()
         val end = endDateInclusive.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val pm = context.packageManager
-        val homePackages = homePackages(pm)
+        val skipPackages = excludedPackages(pm)
         queryStats(start, end)
             .groupBy { it.packageName }
             .mapNotNull { (pkg, list) ->
                 val total = list.sumOf { it.totalTimeInForeground }
                 if (total < MIN_DISPLAY_MS) return@mapNotNull null
-                if (pkg in homePackages) return@mapNotNull null
+                if (pkg in skipPackages) return@mapNotNull null
                 val label = appLabel(pm, pkg) ?: return@mapNotNull null
                 AppUsageItem(pkg, label, total, loadIcon(pkg))
             }
             .sortedByDescending { it.durationMs }
     }
 
-    /** 某天的 App 使用总时长（不含桌面，与排行口径一致） */
+    /** 某天的 App 使用总时长（不含桌面与「一事」自己，与排行口径一致） */
     suspend fun loadDayTotal(date: LocalDate): Long = withContext(Dispatchers.IO) {
         val zone = ZoneId.systemDefault()
         val start = date.atStartOfDay(zone).toInstant().toEpochMilli()
         val end = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val homePackages = homePackages(context.packageManager)
+        val skipPackages = excludedPackages(context.packageManager)
         queryStats(start, end)
-            .filter { it.packageName !in homePackages }
+            .filter { it.packageName !in skipPackages }
             .sumOf { it.totalTimeInForeground }
     }
 
@@ -368,7 +368,7 @@ class UsageStatsRepository(private val context: Context) {
             ?: return@withContext emptyList()
         val events = manager.queryEvents(start, end) ?: return@withContext emptyList()
         val pm = context.packageManager
-        val homePackages = homePackages(pm)
+        val skipPackages = excludedPackages(pm)
 
         val resumedType = if (Build.VERSION.SDK_INT >= 29) {
             UsageEvents.Event.ACTIVITY_RESUMED
@@ -390,7 +390,7 @@ class UsageStatsRepository(private val context: Context) {
         fun closeInterval(pkg: String, endMs: Long) {
             val begin = openAt.remove(pkg) ?: return
             if (endMs <= begin) return
-            if (pkg in homePackages) return
+            if (pkg in skipPackages) return
             val label = appLabel(pm, pkg) ?: return
             raw += AppUsageInterval(pkg, label, begin, endMs)
         }
@@ -457,6 +457,13 @@ class UsageStatsRepository(private val context: Context) {
             .map { it.activityInfo.packageName }
             .toSet()
     }.getOrDefault(emptySet())
+
+    /**
+     * 不计入「使用」的包名：桌面 + 「一事」自己。
+     * 排除自己是因为：看 App 页时前台的就是一事本身，不排除会让它出现在自己的排行与时间轴里。
+     */
+    private fun excludedPackages(pm: PackageManager): Set<String> =
+        homePackages(pm) + context.packageName
 
     private fun loadIcon(pkg: String): ImageBitmap? = runCatching {
         val drawable = context.packageManager.getApplicationIcon(pkg)

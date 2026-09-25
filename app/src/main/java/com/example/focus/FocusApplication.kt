@@ -1,7 +1,9 @@
 package com.example.focus
 
 import android.app.Application
+import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.prefs.TimerStateStore
+import com.example.focus.data.usage.DefaultCategoryRules
 import com.example.focus.service.TimerService
 import com.example.focus.service.TimerStateHolder
 import kotlinx.coroutines.CoroutineScope
@@ -10,9 +12,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /**
- * 应用入口：只在**进程创建时**恢复一次未结束的计时。
+ * 应用入口：只在**进程创建时**恢复一次未结束的计时，并写入内置时间分类。
  *
- * 为什么放在 Application 而不是 Activity：
+ * 为什么恢复逻辑放在 Application 而不是 Activity：
  * Activity 从后台返回时可能被销毁重建，若在重建时再次读取存档恢复，
  * 会用较旧的快照覆盖内存里正在走的计时，表现为"时间倒退/计时停止"。
  * Application.onCreate 每个进程只执行一次，天然避免这个问题。
@@ -23,6 +25,23 @@ class FocusApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        seedDefaultCategories()
+        restoreTimerIfNeeded()
+    }
+
+    /** 首次运行时写入内置时间分类（用户之后可自行增删改） */
+    private fun seedDefaultCategories() {
+        appScope.launch {
+            runCatching {
+                val dao = AppDatabase.get(this@FocusApplication).timeCategoryDao()
+                if (dao.count() == 0) {
+                    dao.upsertAll(DefaultCategoryRules.CATEGORIES)
+                }
+            }
+        }
+    }
+
+    private fun restoreTimerIfNeeded() {
         appScope.launch {
             val persisted = TimerStateStore(this@FocusApplication).load() ?: return@launch
             if (persisted.name.isEmpty()) return@launch

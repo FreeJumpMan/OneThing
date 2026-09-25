@@ -26,6 +26,15 @@ release/
 # ===== Kotlin =====
 .kotlin/
 
+# ===== Linux 侧构建产物（与 Windows 的 build/ 隔离）=====
+.build-linux/
+
+# ===== 签名密钥（绝不入库）=====
+keystore/
+keystore.properties
+*.jks
+*.keystore
+
 # ===== 方案文档与设计资产（不纳入仓库）=====
 PLAN/
 

@@ -73,7 +73,6 @@ import com.example.focus.data.db.TodoItem
 import com.example.focus.service.TimerUiState
 import com.example.focus.ui.formatClock
 import com.example.focus.ui.formatDurationCompact
-import com.example.focus.ui.permissions.PermissionCenterDialog
 
 /**
  * 专注板块（首页）：品牌区 + 当前专注卡 + 轻量列表。
@@ -82,14 +81,16 @@ import com.example.focus.ui.permissions.PermissionCenterDialog
  * 删除操作默认收起，长按列表进入编辑模式才出现。
  */
 @Composable
-fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
+fun TodoScreen(
+    onOpenSettings: () -> Unit,
+    viewModel: TodoViewModel = viewModel(),
+) {
     val state by viewModel.uiState.collectAsState()
     val items by viewModel.items.collectAsState()
     val todayByName by viewModel.todayByName.collectAsState()
 
     var deleteTarget by remember { mutableStateOf<TodoItem?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
-    var showPermissions by remember { mutableStateOf(false) }
     var editMode by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
@@ -134,10 +135,10 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
-            IconButton(onClick = { showPermissions = true }) {
+            IconButton(onClick = onOpenSettings) {
                 Icon(
                     Icons.Outlined.Settings,
-                    contentDescription = "权限设置",
+                    contentDescription = "设置",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(22.dp),
                 )
@@ -227,24 +228,7 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
             }
         }
 
-        // 添加入口
-        TextButton(
-            onClick = { showAddDialog = true },
-            modifier = Modifier.padding(vertical = 4.dp),
-        ) {
-            Icon(
-                Icons.Outlined.Add,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(18.dp),
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "添加一件事",
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-            )
-        }
+        // 添加待办的入口在「当前专注卡」的圆形加号上，列表底部不再重复放一个
     }
 
     if (showAddDialog) {
@@ -272,10 +256,6 @@ fun TodoScreen(viewModel: TodoViewModel = viewModel()) {
                 TextButton(onClick = { deleteTarget = null }) { Text("取消") }
             },
         )
-    }
-
-    if (showPermissions) {
-        PermissionCenterDialog(onDismiss = { showPermissions = false })
     }
 }
 

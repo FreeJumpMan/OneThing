@@ -5,7 +5,6 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -39,6 +38,7 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -109,56 +109,19 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     val daySessions by viewModel.selectedDaySessions.collectAsState()
     val syncedIds by viewModel.syncedIds.collectAsState()
     val pendingSync by viewModel.pendingSync.collectAsState()
+    val pendingSyncAll by viewModel.pendingSyncAll.collectAsState()
     val debugPending by viewModel.debugPending.collectAsState()
     val error by viewModel.error.collectAsState()
     val showSettingsGuide by viewModel.showSettingsGuide.collectAsState()
 
-    // 日历是否折叠为一周
-    var collapsed by rememberSaveable { mutableStateOf(false) }
+    // 日历默认收起为一周，需要时展开整月
+    var collapsed by rememberSaveable { mutableStateOf(true) }
     var deleteTarget by remember { mutableStateOf<FocusSession?>(null) }
     var editingSession by remember { mutableStateOf<FocusSession?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showDebugDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
-    var showImportConfirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
-    // 导出：让用户选保存位置，写入 JSON 备份
-    val exportLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/json")
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val json = viewModel.buildBackupJson()
-                runCatching {
-                    context.contentResolver.openOutputStream(uri)?.use { out ->
-                        out.write(json.toByteArray())
-                    }
-                }
-                Toast.makeText(context, "数据已导出", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    // 导入：让用户选备份文件，读取并恢复
-    val importLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                val json = runCatching {
-                    context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                }.getOrNull() ?: ""
-                val error = viewModel.restoreFromJson(json)
-                Toast.makeText(
-                    context,
-                    if (error == null) "数据已恢复" else "导入失败：$error",
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        }
-    }
 
     // 日历读写权限要一起申请：查询日历需要 READ，写入事件需要 WRITE
     val calendarPermissionLauncher = rememberLauncherForActivityResult(
@@ -189,6 +152,15 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     // 有待同步会话且需要权限时，触发权限申请；授权回调里由 ViewModel 重试同步
     LaunchedEffect(pendingSync) {
         pendingSync?.let {
+            calendarPermissionLauncher.launch(
+                arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
+            )
+        }
+    }
+
+    // 点批量同步但没日历权限时，先申请权限，授权后自动继续
+    LaunchedEffect(pendingSyncAll) {
+        if (pendingSyncAll) {
             calendarPermissionLauncher.launch(
                 arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
             )
@@ -242,20 +214,6 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false },
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("导出数据") },
-                        onClick = {
-                            showMenu = false
-                            exportLauncher.launch("一事备份_${java.time.LocalDate.now()}.json")
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("导入数据") },
-                        onClick = {
-                            showMenu = false
-                            showImportConfirm = true
-                        },
-                    )
                     DropdownMenuItem(
                         text = { Text("日历字段诊断") },
                         onClick = {
@@ -326,21 +284,42 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
         Spacer(modifier = Modifier.height(16.dp))
 
         // 选中日期的记录（时间线，按时间顺序）
-        Text(
-            text = selectedDate.format(dayTitleFormatter),
-            fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-        if (daySessions.isNotEmpty()) {
-            val totalMs = daySessions.sumOf { it.durationMs }
-            Text(
-                text = "${formatDurationCompact(totalMs)} · ${daySessions.size} 次",
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 2.dp),
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = selectedDate.format(dayTitleFormatter),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                )
+                if (daySessions.isNotEmpty()) {
+                    val totalMs = daySessions.sumOf { it.durationMs }
+                    Text(
+                        text = "${formatDurationCompact(totalMs)} · ${daySessions.size} 次",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+            // 一键把当天全部记录同步到系统日历（已同步的会自动跳过）
+            if (daySessions.isNotEmpty()) {
+                IconButton(
+                    onClick = { viewModel.syncSelectedDay() },
+                    modifier = Modifier.size(36.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Sync,
+                        contentDescription = "同步当天全部记录到日历",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
         }
         Spacer(modifier = Modifier.height(10.dp))
 
@@ -374,24 +353,6 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                 }
             }
         }
-    }
-
-    // 导入确认：导入会替换当前所有数据
-    if (showImportConfirm) {
-        AlertDialog(
-            onDismissRequest = { showImportConfirm = false },
-            title = { Text("导入数据？") },
-            text = { Text("导入将替换当前所有数据（专注记录、要做的事、日历映射）。建议先导出备份。") },
-            confirmButton = {
-                TextButton(onClick = {
-                    showImportConfirm = false
-                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                }) { Text("选择文件") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showImportConfirm = false }) { Text("取消") }
-            },
-        )
     }
 
     // 删除确认对话框：已同步的记录可选用是否同时删日历事件

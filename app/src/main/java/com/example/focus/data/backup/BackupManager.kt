@@ -3,6 +3,7 @@ package com.example.focus.data.backup
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.CalendarSync
 import com.example.focus.data.db.FocusSession
+import com.example.focus.data.db.TimelineEvent
 import com.example.focus.data.db.TodoItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -62,6 +63,16 @@ class BackupManager(private val db: AppDatabase) {
         }
         root.put("todoItems", todos)
 
+        // 时间块与日历事件的映射（不入库会导致恢复后重新同步时出现重复事件）
+        val timelines = JSONArray()
+        db.timelineEventDao().getAll().forEach { t ->
+            timelines.put(JSONObject().apply {
+                put("key", t.key)
+                put("eventId", t.eventId)
+            })
+        }
+        root.put("timelineEvents", timelines)
+
         root.toString(2)
     }
 
@@ -79,10 +90,12 @@ class BackupManager(private val db: AppDatabase) {
             val sessionArr = root.optJSONArray("focusSessions") ?: JSONArray()
             val syncArr = root.optJSONArray("calendarSyncs") ?: JSONArray()
             val todoArr = root.optJSONArray("todoItems") ?: JSONArray()
+            val timelineArr = root.optJSONArray("timelineEvents") ?: JSONArray()
 
             db.focusDao().clear()
             db.calendarSyncDao().clear()
             db.todoItemDao().clear()
+            db.timelineEventDao().clear()
 
             if (sessionArr.length() > 0) {
                 db.focusDao().insertAll(
@@ -121,6 +134,18 @@ class BackupManager(private val db: AppDatabase) {
                             id = o.getLong("id"),
                             name = o.getString("name"),
                             createdAt = o.getLong("createdAt"),
+                        )
+                    }
+                )
+            }
+
+            if (timelineArr.length() > 0) {
+                db.timelineEventDao().upsertAll(
+                    (0 until timelineArr.length()).map { i ->
+                        val o = timelineArr.getJSONObject(i)
+                        TimelineEvent(
+                            key = o.getString("key"),
+                            eventId = o.getLong("eventId"),
                         )
                     }
                 )

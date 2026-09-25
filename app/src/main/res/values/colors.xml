@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 图标底色：取自原图背景（米白） -->
-    <color name="ic_launcher_background">#FCFAF5</color>
+    <!-- 图标底色：取自图标内部的米白 -->
+    <color name="ic_launcher_background">#FEFAF5</color>
 </resources>

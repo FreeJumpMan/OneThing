@@ -30,6 +30,10 @@ class SessionRepository(private val dao: FocusDao) {
     fun observeSumsByNameOnDate(date: String): Flow<List<SliceStat>> =
         dao.observeSumsByNameOnDate(date)
 
+    /** 某日期区间的原始会话记录 */
+    fun observeInRange(start: String, end: String): Flow<List<FocusSession>> =
+        dao.observeInRange(start, end)
+
     /** 月内每日记录数（日历热力点） */
     fun observeCountsByDay(start: String, end: String): Flow<List<SliceStat>> =
         dao.observeCountsByDay(start, end)

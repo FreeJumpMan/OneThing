@@ -37,6 +37,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val syncManager = CalendarSyncManager(
         application,
         AppDatabase.get(application).calendarSyncDao(),
+        AppDatabase.get(application).timelineEventDao(),
     )
     private val backupManager = BackupManager(AppDatabase.get(application))
 
@@ -72,6 +73,10 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _pendingSync = MutableStateFlow<FocusSession?>(null)
     val pendingSync: StateFlow<FocusSession?> = _pendingSync.asStateFlow()
 
+    /** 批量同步（当天全部）等待授权标记 */
+    private val _pendingSyncAll = MutableStateFlow(false)
+    val pendingSyncAll: StateFlow<Boolean> = _pendingSyncAll.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -104,6 +109,14 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     /** 权限授权后由 UI 调用，重试挂起的同步 */
     fun retryPendingSync() {
+        // 批量同步（当天全部）
+        if (_pendingSyncAll.value) {
+            _pendingSyncAll.value = false
+            if (syncManager.hasCalendarPermission()) {
+                syncSessionsToCalendar(selectedDaySessions.value)
+            }
+            return
+        }
         val session = _pendingSync.value ?: return
         _pendingSync.value = null
         // 防御：重试前再确认两个权限都在，防止 ROM 只授予了其中一个
@@ -114,13 +127,53 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         doSync(session)
     }
 
+    /** 一键同步选中日期的全部记录（已同步的自动跳过） */
+    fun syncSelectedDay() {
+        val sessions = selectedDaySessions.value
+        if (sessions.isEmpty()) return
+        if (!syncManager.hasCalendarPermission()) {
+            _pendingSyncAll.value = true
+            return
+        }
+        syncSessionsToCalendar(sessions)
+    }
+
+    private fun syncSessionsToCalendar(sessions: List<FocusSession>) {
+        viewModelScope.launch {
+            var failure: String? = null
+            sessions.forEach { session ->
+                if (session.id in _syncedIds.value) return@forEach
+                runCatching {
+                    syncManager.syncSession(
+                        sessionId = session.id,
+                        title = session.name,
+                        startTimeMs = session.startTimeMs,
+                        endTimeMs = session.endTimeMs,
+                        durationMs = session.durationMs,
+                    )
+                }.onSuccess {
+                    _syncedIds.update { ids -> ids + session.id }
+                }.onFailure { e ->
+                    failure = if (e is SecurityException) {
+                        "日历权限不足，请在系统设置中检查日历权限"
+                    } else {
+                        e.message ?: "同步到日历失败"
+                    }
+                }
+            }
+            failure?.let { _error.value = it }
+        }
+    }
+
     fun dismissPendingSync() {
         _pendingSync.value = null
+        _pendingSyncAll.value = false
     }
 
     /** 权限被永久拒绝时调用，弹出引导去设置页 */
     fun onPermissionDeniedPermanently() {
         _pendingSync.value = null
+        _pendingSyncAll.value = false
         _showSettingsGuide.value = true
     }
 

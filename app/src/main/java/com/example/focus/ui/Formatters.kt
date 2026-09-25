@@ -1,5 +1,6 @@
 package com.example.focus.ui
 
+import androidx.compose.ui.graphics.Color
 import java.time.format.DateTimeFormatter
 
 /** 计时大数字：mm:ss 或 h:mm:ss */
@@ -48,3 +49,8 @@ fun formatTimeOfDay(epochMs: Long): String =
     java.time.Instant.ofEpochMilli(epochMs)
         .atZone(java.time.ZoneId.systemDefault())
         .format(timeFormatter)
+
+/** 十六进制颜色字符串 → Compose 颜色；非法值回退暖灰 */
+fun parseHexColor(hex: String): Color = runCatching {
+    Color(android.graphics.Color.parseColor(hex))
+}.getOrDefault(Color(0xFFB8AFA6))

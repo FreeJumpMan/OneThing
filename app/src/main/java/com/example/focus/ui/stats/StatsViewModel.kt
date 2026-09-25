@@ -3,38 +3,50 @@ package com.example.focus.ui.stats
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.focus.data.db.AppCategoryRule
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.CumulativeStats
 import com.example.focus.data.db.DayStats
+import com.example.focus.data.db.FocusSession
+import com.example.focus.data.db.ProductivityLevel
 import com.example.focus.data.db.SliceStat
+import com.example.focus.data.prefs.SettingsStore
 import com.example.focus.data.repo.SessionRepository
+import com.example.focus.data.usage.DefaultCategoryRules
+import com.example.focus.data.usage.EffectiveFocus
+import com.example.focus.data.usage.UsageStatsRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
 
 /**
- * 统计板块 ViewModel，覆盖七项指标：
- * 1. 累计专注（次数/时长/日均） 2. 当日专注
- * 4. 时长分布饼图（日/周/月） 5. 时段分布（跟随查看月份） 6. 月度每日曲线（可切换月份）
- * 7. 年度按月曲线（可切换年份）
+ * 统计板块 ViewModel。
  *
- * 关键设计：日期边界不缓存，用 currentDate 流每 30 秒检查一次，
- * 跨天/跨周/跨月/跨年后统计自动切换到新周期。
+ * 「有效专注」的口径：专注计时 ∪ 专注 App 使用时间（区间去重）。
+ * 这样没有手动开计时的碎片时间（例如背单词）也能被系统使用记录补足，
+ * 但同一段时间不会被重复计算两次。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repo = SessionRepository(AppDatabase.get(application).focusDao())
+    private val usageRepo = UsageStatsRepository(application)
+    private val focusAppDao = AppDatabase.get(application).focusAppDao()
+    private val settingsStore = SettingsStore(application)
 
     enum class PieMode { DAY, WEEK, MONTH }
 
@@ -46,39 +58,72 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
         }
     }.distinctUntilChanged()
 
-    /** 1. 累计专注（全时段，无需日期参数） */
+    /** 用户标记为「专注 App」的包名集合 */
+    private val focusPackages: Flow<Set<String>> =
+        focusAppDao.observeAll().map { list ->
+            list.filter { it.enabled }.map { it.packageName }.toSet()
+        }
+
+    /** 短暂切换阈值（来自设置，分钟 → 毫秒） */
+    private val switchToleranceMs: Flow<Long> =
+        settingsStore.settings.map { it.switchToleranceMinutes * 60_000L }
+
+    /** 1. 累计专注（全时段，纯计时数据） */
     val cumulative: StateFlow<CumulativeStats?> =
         repo.observeCumulative().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    /** 2. 当日专注，跨天自动切换 */
+    /** 2. 当日计时聚合（次数 / 计时时长），用于次数与对照 */
     val todayStats: StateFlow<DayStats?> =
         currentDate.flatMapLatest { date ->
             repo.observeDayStats(date.toString())
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-    // ===== 顶部核心指标：本月专注与环比 =====
+    /** 2b. 当日有效专注：计时 ∪ 专注 App 使用（去重） */
+    val todayEffective: StateFlow<EffectiveFocus?> =
+        combine(
+            currentDate.flatMapLatest { date ->
+                repo.observeInRange(date.toString(), date.toString()).map { date to it }
+            },
+            focusPackages,
+            switchToleranceMs,
+        ) { (date, sessions), packages, toleranceMs ->
+            TodayContext(date, sessions, packages, toleranceMs)
+        }
+            .flatMapLatest { ctx ->
+                flow {
+                    emit(
+                        usageRepo.loadDayEffectiveFocus(
+                            date = ctx.date,
+                            sessions = ctx.sessions,
+                            packages = ctx.packages,
+                            gapToleranceMs = ctx.toleranceMs,
+                        )
+                    )
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    // ===== 顶部核心指标：本月专注与环比（纯计时口径，App 数据仅系统保留期内可用） =====
 
     private val thisMonth: YearMonth = YearMonth.now()
     private val lastMonth: YearMonth = thisMonth.minusMonths(1)
 
-    /** 本月总专注时长 */
     val monthTotal: StateFlow<Long> =
         repo.observeTotalInRange(
             thisMonth.atDay(1).toString(),
             thisMonth.atEndOfMonth().toString(),
         ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
-    /** 上月总专注时长（算环比） */
     val lastMonthTotal: StateFlow<Long> =
         repo.observeTotalInRange(
             lastMonth.atDay(1).toString(),
             lastMonth.atEndOfMonth().toString(),
         ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0L)
 
-    /** 4. 饼图模式切换 */
+    // ===== 项目分布（按事项类目，数据只能来自计时记录） =====
+
     val pieMode = MutableStateFlow(PieMode.DAY)
 
-    /** 4. 饼图数据：按事项类目分组，日/周/月切换时间范围 */
     val pieData: StateFlow<List<SliceStat>> =
         currentDate.flatMapLatest { today ->
             pieMode.flatMapLatest { mode ->
@@ -98,15 +143,12 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    // ===== 时段分布与月度/年度曲线：支持切换查看周期 =====
+    // ===== 周期可切换的图表 =====
 
-    /** 时段分布与月度曲线当前查看的月份 */
     val viewedMonth = MutableStateFlow(YearMonth.now())
-
-    /** 年度曲线当前查看的年份 */
     val viewedYear = MutableStateFlow(LocalDate.now().year)
 
-    /** 5. 专注时段分布（按小时，跟随查看月份） */
+    /** 5. 时段分布（按小时，纯计时口径） */
     val hourBars: StateFlow<List<SliceStat>> =
         viewedMonth.flatMapLatest { month ->
             repo.observeHourBars(
@@ -115,16 +157,36 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** 6. 月度每日专注时长（跟随查看月份） */
+    /** 6. 每日趋势：每天的有效专注（计时 ∪ 专注 App，去重） */
     val dailyLine: StateFlow<List<SliceStat>> =
-        viewedMonth.flatMapLatest { month ->
-            repo.observeDailyLine(
-                month.atDay(1).toString(),
-                month.atEndOfMonth().toString(),
-            )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        combine(viewedMonth, focusPackages, switchToleranceMs) { month, packages, toleranceMs ->
+            Triple(month, packages, toleranceMs)
+        }
+            .flatMapLatest { (month, packages, toleranceMs) ->
+                repo.observeInRange(
+                    month.atDay(1).toString(),
+                    month.atEndOfMonth().toString(),
+                ).map { sessions -> MonthContext(month, sessions, packages, toleranceMs) }
+            }
+            .flatMapLatest { ctx ->
+                flow {
+                    val daily = usageRepo.loadDailyEffectiveFocus(
+                        sessions = ctx.sessions,
+                        packages = ctx.packages,
+                        startDate = ctx.month.atDay(1),
+                        endDate = ctx.month.atEndOfMonth(),
+                        gapToleranceMs = ctx.toleranceMs,
+                    )
+                    emit(
+                        daily.entries
+                            .sortedBy { it.key }
+                            .map { SliceStat(it.key.toString(), it.value) }
+                    )
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    /** 7. 年度专注统计（按月，跟随查看年份） */
+    /** 7. 年度趋势（按月，纯计时口径） */
     val monthly: StateFlow<List<SliceStat>> =
         viewedYear.flatMapLatest { year ->
             repo.observeMonthly("$year-01-01", "$year-12-31")
@@ -136,7 +198,6 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun nextMonth() {
         val next = viewedMonth.value.plusMonths(1)
-        // 不允许查看未来月份
         if (!next.isAfter(YearMonth.now())) viewedMonth.value = next
     }
 
@@ -146,7 +207,22 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     fun nextYear() {
         val next = viewedYear.value + 1
-        // 不允许查看未来年份
         if (next <= LocalDate.now().year) viewedYear.value = next
     }
 }
+
+/** 当日有效专注计算所需的上下文 */
+private data class TodayContext(
+    val date: LocalDate,
+    val sessions: List<FocusSession>,
+    val packages: Set<String>,
+    val toleranceMs: Long,
+)
+
+/** 月度每日有效专注计算所需的上下文 */
+private data class MonthContext(
+    val month: YearMonth,
+    val sessions: List<FocusSession>,
+    val packages: Set<String>,
+    val toleranceMs: Long,
+)

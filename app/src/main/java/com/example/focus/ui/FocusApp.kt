@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.DateRange
+import androidx.compose.material.icons.outlined.Smartphone
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +27,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.focus.ui.app.AppUsageScreen
 import com.example.focus.ui.history.HistoryScreen
+import com.example.focus.ui.settings.CategoryDetailScreen
+import com.example.focus.ui.settings.CategorySettingsScreen
+import com.example.focus.ui.settings.FocusAppSettingsScreen
+import com.example.focus.ui.settings.SettingsScreen
 import com.example.focus.ui.stats.StatsScreen
 import com.example.focus.ui.theme.screenGradient
 import com.example.focus.ui.todo.TodoScreen
@@ -80,6 +86,19 @@ fun FocusApp() {
                         colors = itemColors,
                     )
                     NavigationBarItem(
+                        selected = currentRoute == "app",
+                        onClick = {
+                            navController.navigate("app") {
+                                popUpTo(navController.graph.findStartDestination().id) { saveState = true }
+                                launchSingleTop = true
+                                restoreState = true
+                            }
+                        },
+                        icon = { Icon(Icons.Outlined.Smartphone, contentDescription = "App") },
+                        label = { Text("App") },
+                        colors = itemColors,
+                    )
+                    NavigationBarItem(
                         selected = currentRoute == "history",
                         onClick = {
                             navController.navigate("history") {
@@ -113,9 +132,37 @@ fun FocusApp() {
                 startDestination = "todo",
                 modifier = Modifier.padding(padding),
             ) {
-                composable("todo") { TodoScreen() }
+                composable("todo") {
+                    TodoScreen(onOpenSettings = { navController.navigate("settings") })
+                }
+                composable("app") { AppUsageScreen() }
                 composable("history") { HistoryScreen() }
                 composable("stats") { StatsScreen() }
+                composable("settings") {
+                    SettingsScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenFocusApps = { navController.navigate("focusApps") },
+                        onOpenCategories = { navController.navigate("categories") },
+                    )
+                }
+                composable("focusApps") {
+                    FocusAppSettingsScreen(onBack = { navController.popBackStack() })
+                }
+                composable("categories") {
+                    CategorySettingsScreen(
+                        onBack = { navController.popBackStack() },
+                        onOpenCategory = { categoryId ->
+                            navController.navigate("category/$categoryId")
+                        },
+                    )
+                }
+                composable("category/{categoryId}") { entry ->
+                    val categoryId = entry.arguments?.getString("categoryId")?.toLongOrNull() ?: 0L
+                    CategoryDetailScreen(
+                        categoryId = categoryId,
+                        onBack = { navController.popBackStack() },
+                    )
+                }
             }
         }
     }

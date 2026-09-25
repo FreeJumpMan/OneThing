@@ -75,6 +75,15 @@ interface FocusDao {
     )
     fun observePieByName(start: String, end: String): Flow<List<SliceStat>>
 
+    /** 某日期区间的原始会话记录（用于与 App 使用时间合并去重） */
+    @Query(
+        """
+        SELECT * FROM focus_sessions WHERE date BETWEEN :start AND :end
+        ORDER BY startTimeMs ASC
+        """
+    )
+    fun observeInRange(start: String, end: String): Flow<List<FocusSession>>
+
     /** 月内每日记录数（日历热力点：记录越多点越多） */
     @Query(
         """

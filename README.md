@@ -118,6 +118,7 @@ app/src/main/java/com/example/focus/
 
 ## 备注
 
+- **构建目录隔离**：项目位于共享目录时，Linux 与 Windows 切勿共用 `build/`（Kotlin 增量编译缓存中的路径格式会冲突，Windows 会把 `/mnt/...` 当作相对路径而报错）。命令行构建请加环境变量 `YISHI_LINUX_BUILD=1`，产物会落到 `.build-linux/`；Android Studio 侧不用该变量，继续用默认 `build/`
 - 本项目刻意不用 version catalog（`libs.versions.toml`）：共享目录/部分文件系统对长文件名有限制，catalog 生成的访问器类名会超限导致构建失败，直接写依赖最稳
 - 数据库升级：`AppDatabase` 当前 version 为 3，已含 `MIGRATION_1_2`（日历映射表）、`MIGRATION_2_3`（待办表）；后续改实体结构需新增 Migration
 - 图表配色跟随主题暖色系（珊瑚橙/暖黄/松绿/暖棕），在 `Charts.kt` 的 `chartColors` 里可调

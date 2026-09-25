@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知栏小图标。
+  约束：系统只取图形的 alpha 通道做单色渲染，尺寸约 16~24dp，
+  因此必须使用极简的单一形状（汉字在这个尺寸下无法辨认）。
+  这里用「圆环 + 中心点」表达「专注一点」，与 App 图标的圆润语言一致。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M3,12 a9,9 0 1,1 18,0 a9,9 0 1,1 -18,0"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,12 m-2.5,0 a2.5,2.5 0 1,1 5,0 a2.5,2.5 0 1,1 -5,0" />
+</vector>

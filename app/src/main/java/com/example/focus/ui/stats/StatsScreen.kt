@@ -1,9 +1,12 @@
 package com.example.focus.ui.stats
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -11,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
@@ -29,6 +33,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -37,6 +43,7 @@ import com.example.focus.ui.components.HourBarChart
 import com.example.focus.ui.components.PieChart
 import com.example.focus.ui.components.SmoothLineChart
 import com.example.focus.ui.formatDurationCompact
+import com.example.focus.ui.parseHexColor
 import com.example.focus.ui.stats.StatsViewModel.PieMode
 import java.time.LocalDate
 import java.time.YearMonth
@@ -52,6 +59,7 @@ import kotlin.math.roundToInt
 fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
     val cumulative by viewModel.cumulative.collectAsState()
     val todayStats by viewModel.todayStats.collectAsState()
+    val todayEffective by viewModel.todayEffective.collectAsState()
     val pieMode by viewModel.pieMode.collectAsState()
     val pieData by viewModel.pieData.collectAsState()
     val hourBars by viewModel.hourBars.collectAsState()
@@ -158,21 +166,34 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
             }
         }
 
-        // 辅助数据：一行紧凑信息，降低信息密度
+        // 辅助数据：一行紧凑信息（今日为「有效专注」，含专注 App 使用时间）
         item {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(28.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CompactStat(
-                    label = "今日",
-                    value = "${formatDurationCompact(todayStats?.totalMs ?: 0)} · ${todayStats?.sessionCount ?: 0} 次",
-                )
-                CompactStat(
-                    label = "累计",
-                    value = "${formatDurationCompact(cumulative?.totalMs ?: 0)} · ${cumulative?.sessionCount ?: 0} 次",
-                )
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(28.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CompactStat(
+                        label = "今日",
+                        value = "${formatDurationCompact(todayEffective?.effectiveMs ?: 0L)}" +
+                            " · ${todayStats?.sessionCount ?: 0} 次",
+                    )
+                    CompactStat(
+                        label = "累计",
+                        value = "${formatDurationCompact(cumulative?.totalMs ?: 0)}" +
+                            " · ${cumulative?.sessionCount ?: 0} 次",
+                    )
+                }
+                val appMs = todayEffective?.appMs ?: 0L
+                if (appMs > 0L) {
+                    Text(
+                        text = "今日含 App 专注 ${formatDurationCompact(appMs)}（已与计时去重）",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 6.dp),
+                    )
+                }
             }
         }
 

@@ -100,6 +100,7 @@ class TimerService : Service() {
 
     private lateinit var store: TimerStateStore
     private var mediaSession: MediaSessionCompat? = null
+    private var appIconBitmap: android.graphics.Bitmap? = null
     private val handler = Handler(Looper.getMainLooper())
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var foregroundActive = false
@@ -150,6 +151,7 @@ class TimerService : Service() {
     override fun onCreate() {
         super.onCreate()
         store = TimerStateStore(this)
+        appIconBitmap = loadAppIcon()
 
         val manager = getSystemService(NotificationManager::class.java)
         val channel = NotificationChannel(
@@ -279,6 +281,21 @@ class TimerService : Service() {
         mediaSession = null
         super.onDestroy()
     }
+
+    /** 把应用图标转成位图，用作锁屏媒体卡片的封面 */
+    private fun loadAppIcon(): android.graphics.Bitmap? = runCatching {
+        val drawable = androidx.core.content.res.ResourcesCompat.getDrawable(
+            resources, R.mipmap.ic_launcher_yishi, null,
+        ) ?: return null
+        val size = 256
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            size, size, android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        val canvas = android.graphics.Canvas(bitmap)
+        drawable.setBounds(0, 0, size, size)
+        drawable.draw(canvas)
+        bitmap
+    }.getOrNull()
 
     /**
      * 进程被杀后服务重建 / 冷启动恢复：
@@ -438,11 +455,16 @@ class TimerService : Service() {
                     MediaMetadataCompat.METADATA_KEY_ARTIST,
                     "${if (running) "专注中" else "已暂停"} · ${formatClock(totalMs)}",
                 )
+                .apply {
+                    appIconBitmap?.let {
+                        putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it)
+                    }
+                }
                 .build()
         )
 
         val builder = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_timer)
+            .setSmallIcon(R.drawable.ic_stat_focus)
             .setContentTitle(displayName)
             .setOngoing(true)
             .setOnlyAlertOnce(true)

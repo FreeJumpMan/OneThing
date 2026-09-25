@@ -8,6 +8,8 @@ import android.provider.CalendarContract
 import androidx.core.content.ContextCompat
 import com.example.focus.data.db.CalendarSync
 import com.example.focus.data.db.CalendarSyncDao
+import com.example.focus.data.db.TimelineEvent
+import com.example.focus.data.db.TimelineEventDao
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.TimeZone
@@ -30,6 +32,7 @@ import java.util.TimeZone
 class CalendarSyncManager(
     private val context: Context,
     private val syncDao: CalendarSyncDao,
+    private val timelineDao: TimelineEventDao,
 ) {
 
     private val resolver get() = context.contentResolver
@@ -171,6 +174,58 @@ class CalendarSyncManager(
     /** 查询某条会话是否已同步到日历（查本地映射），用于 UI 显示"已同步"标记 */
     suspend fun isSessionSynced(sessionId: Long): Boolean =
         withContext(Dispatchers.IO) { syncDao.getBySessionId(sessionId) != null }
+
+    // ===== 时间块同步（App 时间轴 → 日历）=====
+
+    /**
+     * 清空某天由时间轴同步生成的事件。
+     * 时间块会随分类规则变化而重组，所以重新同步前先整体清掉，避免残留旧块。
+     */
+    suspend fun clearTimelineEvents(date: String): Int = withContext(Dispatchers.IO) {
+        val pattern = "timeline_${date}_%"
+        val existing = timelineDao.getByPattern(pattern)
+        var deleted = 0
+        existing.forEach { item ->
+            deleted += runCatching {
+                resolver.delete(
+                    ContentUris.withAppendedId(CalendarContract.Events.CONTENT_URI, item.eventId),
+                    null, null,
+                )
+            }.getOrDefault(0)
+        }
+        timelineDao.deleteByPattern(pattern)
+        deleted
+    }
+
+    /**
+     * 插入一个时间块事件（标题为分类名）。
+     * 事件 id 记在本地映射表里（不用系统的 sync_data，国产 ROM 不暴露该列）。
+     */
+    suspend fun insertTimelineBlock(
+        date: String,
+        index: Int,
+        title: String,
+        description: String,
+        startMs: Long,
+        endMs: Long,
+    ): Long? = withContext(Dispatchers.IO) {
+        val calendarId = findWritableCalendarId() ?: return@withContext null
+        runCatching {
+            val values = ContentValues().apply {
+                put(CalendarContract.Events.CALENDAR_ID, calendarId)
+                put(CalendarContract.Events.TITLE, title)
+                put(CalendarContract.Events.DESCRIPTION, description)
+                put(CalendarContract.Events.DTSTART, startMs)
+                put(CalendarContract.Events.DTEND, endMs)
+                put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+            }
+            val uri = resolver.insert(CalendarContract.Events.CONTENT_URI, values)
+                ?: return@runCatching null
+            val eventId = ContentUris.parseId(uri)
+            timelineDao.upsert(TimelineEvent("timeline_${date}_$index", eventId))
+            eventId
+        }.getOrNull()
+    }
 
     // ===== 诊断工具：用于确认国产 ROM 日历的自定义字段（如 vivo 的"个人/工作"分类）=====
     // 注意：所有查询都必须包 runCatching，provider 权限拒绝是运行时行为，

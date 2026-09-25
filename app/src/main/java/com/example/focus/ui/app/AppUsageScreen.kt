@@ -64,6 +64,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.focus.data.usage.AppUsageItem
 import com.example.focus.data.usage.DayUsage
+import com.example.focus.data.usage.TimelineBlock
 import com.example.focus.ui.formatDurationCompact
 import com.example.focus.ui.formatTimeOfDay
 import com.example.focus.ui.parseHexColor

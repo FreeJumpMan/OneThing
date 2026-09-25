@@ -78,6 +78,24 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             repo.observeDayStats(date.toString())
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
+    /** 2c. 「一天的时间块」当前查看的日期 */
+    val blockDate = MutableStateFlow(LocalDate.now())
+
+    /** 该日期当天的全部专注记录（「一天的时间块」网格用） */
+    val dayBlockSessions: StateFlow<List<FocusSession>> =
+        blockDate.flatMapLatest { date ->
+            repo.observeInRange(date.toString(), date.toString())
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun prevBlockDate() {
+        blockDate.value = blockDate.value.minusDays(1)
+    }
+
+    fun nextBlockDate() {
+        val next = blockDate.value.plusDays(1)
+        if (!next.isAfter(LocalDate.now())) blockDate.value = next
+    }
+
     /** 2b. 当日有效专注：计时 ∪ 专注 App 使用（去重） */
     val todayEffective: StateFlow<EffectiveFocus?> =
         combine(
@@ -125,23 +143,24 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
     val pieMode = MutableStateFlow(PieMode.DAY)
 
     val pieData: StateFlow<List<SliceStat>> =
-        currentDate.flatMapLatest { today ->
-            pieMode.flatMapLatest { mode ->
-                val range = when (mode) {
-                    PieMode.DAY -> today.toString() to today.toString()
-                    PieMode.WEEK -> {
-                        val weekStart = today.with(DayOfWeek.MONDAY)
-                        weekStart.toString() to weekStart.plusDays(6).toString()
-                    }
+        combine(currentDate, blockDate) { today, anchor -> today to anchor }
+            .flatMapLatest { (today, anchorDate) ->
+                pieMode.flatMapLatest { mode ->
+                    val range = when (mode) {
+                        PieMode.DAY -> anchorDate.toString() to anchorDate.toString()
+                        PieMode.WEEK -> {
+                            val weekStart = today.with(DayOfWeek.MONDAY)
+                            weekStart.toString() to weekStart.plusDays(6).toString()
+                        }
 
-                    PieMode.MONTH -> {
-                        val month = YearMonth.from(today)
-                        month.atDay(1).toString() to month.atEndOfMonth().toString()
+                        PieMode.MONTH -> {
+                            val month = YearMonth.from(today)
+                            month.atDay(1).toString() to month.atEndOfMonth().toString()
+                        }
                     }
+                    repo.observePieByName(range.first, range.second)
                 }
-                repo.observePieByName(range.first, range.second)
-            }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     // ===== 周期可切换的图表 =====
 

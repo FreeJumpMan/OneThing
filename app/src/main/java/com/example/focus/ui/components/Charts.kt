@@ -50,7 +50,7 @@ import kotlin.math.roundToInt
  * 统计图表配色：以品牌珊瑚橙为主，其余低饱和度（浅橙 / 浅金 / 低饱和绿 / 暖灰 / 橙棕），
  * 避免变成彩色 Dashboard。
  */
-private val chartColors = listOf(
+internal val chartColors = listOf(
     Color(0xFFFF684A),
     Color(0xFFFFA07A),
     Color(0xFFE8C89A),

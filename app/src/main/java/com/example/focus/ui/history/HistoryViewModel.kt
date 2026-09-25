@@ -113,9 +113,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         autoRefreshTick.value = System.currentTimeMillis()
     }
 
-    /** 已同步到日历的会话 id 集合 */
-    private val _syncedIds = MutableStateFlow<Set<Long>>(emptySet())
-    val syncedIds: StateFlow<Set<Long>> = _syncedIds.asStateFlow()
+    /** 已同步到日历的会话 id 集合（从映射表实时派生，手动与自动同步都覆盖） */
+    val syncedIds: StateFlow<Set<Long>> =
+        AppDatabase.get(application).calendarSyncDao().observeAll()
+            .map { list -> list.map { it.sessionId }.toSet() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
     /** 等待授权的待同步会话（授权后自动重试） */
     private val _pendingSync = MutableStateFlow<FocusSession?>(null)
@@ -190,7 +192,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             var failure: String? = null
             sessions.forEach { session ->
-                if (session.id in _syncedIds.value) return@forEach
+                if (session.id in syncedIds.value) return@forEach
                 runCatching {
                     syncManager.syncSession(
                         sessionId = session.id,
@@ -199,8 +201,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         endTimeMs = session.endTimeMs,
                         durationMs = session.durationMs,
                     )
-                }.onSuccess {
-                    _syncedIds.update { ids -> ids + session.id }
                 }.onFailure { e ->
                     failure = if (e is SecurityException) {
                         "日历权限不足，请在系统设置中检查日历权限"
@@ -239,8 +239,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     endTimeMs = session.endTimeMs,
                     durationMs = session.durationMs,
                 )
-            }.onSuccess {
-                _syncedIds.update { ids -> ids + session.id }
             }.onFailure { e ->
                 _error.value = if (e is SecurityException) {
                     "日历权限不足，请在系统设置中检查日历权限"
@@ -260,7 +258,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 // 保留系统日历事件，只清掉本地映射
                 syncManager.clearSessionMapping(session.id)
             }
-            _syncedIds.update { ids -> ids - session.id }
         }
     }
 

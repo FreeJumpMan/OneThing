@@ -104,6 +104,16 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    /** 结束专注后自动同步到日历的开关 */
+    fun setAutoSyncCalendar(enabled: Boolean) {
+        viewModelScope.launch { store.setAutoSyncCalendar(enabled) }
+    }
+
+    /** App 使用自动同步到日历的开关 */
+    fun setAutoSyncAppUsage(enabled: Boolean) {
+        viewModelScope.launch { store.setAutoSyncAppUsage(enabled) }
+    }
+
     /** 加载最近 7 天用过的 App 作为专注 App 候选（含已标记的） */
     fun loadCandidates() {
         viewModelScope.launch {

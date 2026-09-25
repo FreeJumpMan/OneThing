@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Focus" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- 主题只负责窗口装饰（状态栏、启动背景）；应用内配色由 Compose 的 FocusTheme 决定。
+         开 edge-to-edge 后状态栏透明、页面顶部的柔光渐变会自然延伸到状态栏下。 -->
+    <style name="Theme.Focus" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowBackground">#FFFAF7F5</item>
+    </style>
 </resources>

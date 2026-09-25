@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
+import kotlinx.coroutines.flow.Flow
 
 /**
  * 会话与日历事件的本地映射表。
@@ -33,6 +34,9 @@ interface CalendarSyncDao {
 
     @Query("SELECT * FROM calendar_syncs")
     suspend fun getAllOnce(): List<CalendarSync>
+
+    @Query("SELECT * FROM calendar_syncs")
+    fun observeAll(): Flow<List<CalendarSync>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(syncs: List<CalendarSync>)

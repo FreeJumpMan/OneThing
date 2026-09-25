@@ -41,6 +41,10 @@ interface FocusDao {
     @Query("SELECT * FROM focus_sessions WHERE date = :date ORDER BY startTimeMs ASC")
     fun observeByDate(date: String): Flow<List<FocusSession>>
 
+    /** 某一天的会话（一次性查询，供日历同步规划用） */
+    @Query("SELECT * FROM focus_sessions WHERE date = :date ORDER BY startTimeMs ASC")
+    suspend fun getByDateOnce(date: String): List<FocusSession>
+
     /** 时间段内有记录的所有日期，供日历画标记点 */
     @Query("SELECT DISTINCT date FROM focus_sessions WHERE date BETWEEN :start AND :end")
     fun observeDistinctDates(start: String, end: String): Flow<List<String>>

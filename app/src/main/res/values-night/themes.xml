@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色模式（跟随系统）的窗口装饰：透明状态栏 + 浅色图标 + 深色启动背景，避免冷启动闪白。 -->
+    <style name="Theme.Focus" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">#FF101010</item>
+    </style>
+</resources>

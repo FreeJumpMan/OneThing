@@ -1,9 +1,12 @@
 package com.example.focus.ui.stats
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
@@ -31,6 +35,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -38,15 +43,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.focus.data.db.FocusSession
 import com.example.focus.data.db.SliceStat
 import com.example.focus.ui.components.HourBarChart
 import com.example.focus.ui.components.PieChart
 import com.example.focus.ui.components.SmoothLineChart
+import com.example.focus.ui.components.chartColors
 import com.example.focus.ui.formatDurationCompact
 import com.example.focus.ui.parseHexColor
 import com.example.focus.ui.stats.StatsViewModel.PieMode
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -60,6 +70,8 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
     val cumulative by viewModel.cumulative.collectAsState()
     val todayStats by viewModel.todayStats.collectAsState()
     val todayEffective by viewModel.todayEffective.collectAsState()
+    val blockDate by viewModel.blockDate.collectAsState()
+    val dayBlockSessions by viewModel.dayBlockSessions.collectAsState()
     val pieMode by viewModel.pieMode.collectAsState()
     val pieData by viewModel.pieData.collectAsState()
     val hourBars by viewModel.hourBars.collectAsState()
@@ -197,9 +209,16 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
             }
         }
 
-        // 项目分布（环形图 + 百分比）
+        // 项目分布（环形图 + 百分比）。日视图跟随「一天的时间块」的日期
         item {
-            SectionBlock(title = "项目分布") {
+            SectionBlock(
+                title = "项目分布",
+                periodText = if (pieMode == PieMode.DAY) {
+                    blockDate.format(dayBlockShortFormatter)
+                } else {
+                    null
+                },
+            ) {
                 SingleChoiceSegmentedButtonRow {
                     PieMode.entries.forEachIndexed { index, mode ->
                         SegmentedButton(
@@ -222,6 +241,19 @@ fun StatsScreen(viewModel: StatsViewModel = viewModel()) {
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 PieChart(data = pieData)
+            }
+        }
+
+        // 一天的时间块
+        item {
+            SectionBlock(title = "一天的时间块") {
+                DayTimeBlocksContent(
+                    date = blockDate,
+                    sessions = dayBlockSessions,
+                    canGoNext = blockDate.isBefore(LocalDate.now()),
+                    onPrev = { viewModel.prevBlockDate() },
+                    onNext = { viewModel.nextBlockDate() },
+                )
             }
         }
 
@@ -291,6 +323,284 @@ private fun CompactStat(label: String, value: String) {
             color = MaterialTheme.colorScheme.onSurface,
         )
     }
+}
+
+private val dayBlockDateFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("M月d日 E", Locale.CHINA)
+
+private val dayBlockShortFormatter: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("M月d日", Locale.CHINA)
+
+/** 时间块日期行的大字：今天 / 昨天 / 前天，更早则显示日期 */
+private fun dayBlockTitle(date: LocalDate): String {
+    val today = LocalDate.now()
+    return when (date) {
+        today -> "今天"
+        today.minusDays(1) -> "昨天"
+        today.minusDays(2) -> "前天"
+        else -> date.format(dayBlockShortFormatter)
+    }
+}
+
+private const val DAY_CELL_MINUTES = 10
+private const val DAY_CELL_COUNT = 24 * 60 / DAY_CELL_MINUTES
+private const val DAY_CELL_MS = DAY_CELL_MINUTES * 60_000L
+
+/** 时间块网格：格子尺寸、格间空隙、中央标签列宽（整体居中，两侧留白） */
+private val DAY_CELL_SIZE = 13.dp
+private val DAY_CELL_GAP = 6.dp
+private val DAY_LABEL_WIDTH = 28.dp
+private val DAY_HALF_WIDTH = DAY_CELL_SIZE * 6 + DAY_CELL_GAP * 5
+
+/** 「一天的时间块」图例项 */
+private data class DayBlockLegend(val name: String, val totalMs: Long, val color: Color)
+
+/**
+ * 把当天专注记录投影到 144 个 10 分钟格上。
+ * 每格取与它重叠时间最长的一条记录所属事项，无记录为 null。
+ * 颜色按事项当天总时长降序分配，复用统计图表调色板。
+ */
+private fun buildDayCells(
+    date: LocalDate,
+    sessions: List<FocusSession>,
+): Pair<List<Color?>, List<DayBlockLegend>> {
+    if (sessions.isEmpty()) return emptyList<Color?>() to emptyList()
+
+    val legend = sessions.groupBy { it.name }
+        .map { (name, list) -> name to list.sumOf { it.durationMs } }
+        .sortedByDescending { it.second }
+        .mapIndexed { index, (name, total) ->
+            DayBlockLegend(name, total, chartColors[index % chartColors.size])
+        }
+    val colorByName = legend.associate { it.name to it.color }
+
+    val zone = ZoneId.systemDefault()
+    val dayStartMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
+    val dayEndMs = dayStartMs + DAY_CELL_COUNT * DAY_CELL_MS
+
+    val cells = MutableList<Color?>(DAY_CELL_COUNT) { null }
+    val occupied = LongArray(DAY_CELL_COUNT)
+
+    sessions.forEach { session ->
+        val start = maxOf(session.startTimeMs, dayStartMs)
+        val end = minOf(session.endTimeMs, dayEndMs)
+        if (end <= start) return@forEach
+        val first = ((start - dayStartMs) / DAY_CELL_MS).toInt().coerceIn(0, DAY_CELL_COUNT - 1)
+        val last = ((end - 1 - dayStartMs) / DAY_CELL_MS).toInt().coerceIn(0, DAY_CELL_COUNT - 1)
+        for (i in first..last) {
+            val cellStart = dayStartMs + i * DAY_CELL_MS
+            val overlap = minOf(end, cellStart + DAY_CELL_MS) - maxOf(start, cellStart)
+            if (overlap > occupied[i]) {
+                occupied[i] = overlap
+                cells[i] = colorByName[session.name]
+            }
+        }
+    }
+    return cells to legend
+}
+
+/**
+ * 「一天的时间块」：把当天专注记录铺到 12 行 × 12 格（每格 10 分钟）的网格上。
+ * 左列为 0–11 时、右列为 12–23 时，每行一小时。
+ */
+@Composable
+private fun DayTimeBlocksContent(
+    date: LocalDate,
+    sessions: List<FocusSession>,
+    canGoNext: Boolean,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+) {
+    val (cells, legend) = remember(date, sessions) { buildDayCells(date, sessions) }
+    val emptyCellColor = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else Color(0xFFE4DED7)
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onPrev, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                    contentDescription = "前一天",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.width(132.dp),
+            ) {
+                Text(
+                    text = date.format(dayBlockDateFormatter),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = dayBlockTitle(date),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(top = 1.dp),
+                )
+            }
+            IconButton(
+                onClick = onNext,
+                enabled = canGoNext,
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                    contentDescription = "后一天",
+                    tint = if (canGoNext) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+
+        if (legend.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 26.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "这一天没有专注记录",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        } else {
+            DayBlockGrid(cells = cells, legend = legend, emptyCellColor = emptyCellColor)
+        }
+    }
+}
+
+/**
+ * 「一天的时间块」的网格部分：副标题 + 上午/下午列头 + 144 格 + 图例。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DayBlockGrid(
+    cells: List<Color?>,
+    legend: List<DayBlockLegend>,
+    emptyCellColor: Color,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "每个时间块代表 10 分钟",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(12.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(
+                DAY_CELL_GAP,
+                Alignment.CenterHorizontally,
+            ),
+        ) {
+            Box(
+                modifier = Modifier.width(DAY_HALF_WIDTH),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "上午",
+                    fontSize = 11.sp,
+                    lineHeight = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(DAY_LABEL_WIDTH))
+            Box(
+                modifier = Modifier.width(DAY_HALF_WIDTH),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "下午",
+                    fontSize = 11.sp,
+                    lineHeight = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Column(verticalArrangement = Arrangement.spacedBy(DAY_CELL_GAP)) {
+            repeat(12) { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(
+                        DAY_CELL_GAP,
+                        Alignment.CenterHorizontally,
+                    ),
+                ) {
+                    repeat(6) { col ->
+                        DayCell(cells[row * 6 + col], emptyCellColor)
+                    }
+                    Text(
+                        text = if (row == 0) "0/12" else row.toString(),
+                        fontSize = 10.sp,
+                        lineHeight = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.width(DAY_LABEL_WIDTH),
+                    )
+                    repeat(6) { col ->
+                        DayCell(cells[(row + 12) * 6 + col], emptyCellColor)
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
+
+        FlowRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            legend.forEach { item ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(9.dp)
+                            .background(item.color, CircleShape)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = item.name,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.width(5.dp))
+                    Text(
+                        text = formatDurationCompact(item.totalMs),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DayCell(color: Color?, emptyColor: Color) {
+    Box(
+        modifier = Modifier
+            .size(DAY_CELL_SIZE)
+            .clip(RoundedCornerShape(2.dp))
+            .background(color ?: emptyColor)
+    )
 }
 
 /**

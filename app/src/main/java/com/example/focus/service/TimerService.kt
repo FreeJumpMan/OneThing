@@ -21,6 +21,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.media.app.NotificationCompat.MediaStyle
+import com.example.focus.FocusApplication
 import com.example.focus.R
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.FocusSession
@@ -395,8 +396,10 @@ class TimerService : Service() {
                 date = formatDate(state.startEpochMs),
             )
             serviceScope.launch {
-                AppDatabase.get(this@TimerService).focusDao().insert(session)
+                val sessionId = AppDatabase.get(this@TimerService).focusDao().insert(session)
                 store.clear()
+                // 自动同步跑在 Application 的 scope 里（服务即将 stopSelf，自身 scope 会被取消）
+                (application as? FocusApplication)?.autoSyncToCalendar(session, sessionId)
             }
         }
         TimerStateHolder.reset()

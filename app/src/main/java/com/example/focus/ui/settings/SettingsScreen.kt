@@ -225,6 +225,22 @@ fun SettingsScreen(
                         }
                     },
                 )
+                SwitchRow(
+                    title = "专注项目自动同步",
+                    subtitle = if (settings.autoSyncCalendar && !permissions.calendar) {
+                        "尚未授予日历权限，自动同步不会生效"
+                    } else {
+                        "专注记录与专注 App 的时段，自动写入系统日历"
+                    },
+                    checked = settings.autoSyncCalendar,
+                    onCheckedChange = { viewModel.setAutoSyncCalendar(it) },
+                )
+                SwitchRow(
+                    title = "App 使用自动同步",
+                    subtitle = "按时间分类写入日历，遵循下方「同步的分类」",
+                    checked = settings.autoSyncAppUsage,
+                    onCheckedChange = { viewModel.setAutoSyncAppUsage(it) },
+                )
                 SettingRow(
                     title = "同步的分类",
                     subtitle = "选择哪些分类的时间块写入日历",
@@ -513,6 +529,52 @@ private fun SettingRow(
                     modifier = Modifier.size(18.dp),
                 )
             }
+        }
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outline,
+            thickness = 0.5.dp,
+        )
+    }
+}
+
+/** 开关设置项 */
+@Composable
+private fun SwitchRow(
+    title: String,
+    subtitle: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    fontSize = 15.sp,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (subtitle != null) {
+                    Text(
+                        text = subtitle,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            }
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
         }
         HorizontalDivider(
             color = MaterialTheme.colorScheme.outline,

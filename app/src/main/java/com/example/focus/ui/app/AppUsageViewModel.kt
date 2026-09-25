@@ -11,10 +11,13 @@ import com.example.focus.data.db.ProductivityLevel
 import com.example.focus.data.db.TimeCategory
 import com.example.focus.data.prefs.SettingsStore
 import com.example.focus.data.sync.CalendarSyncManager
+import com.example.focus.data.sync.syncDayToCalendar
 import com.example.focus.data.usage.AppUsageInterval
 import com.example.focus.data.usage.AppUsageItem
 import com.example.focus.data.usage.DayUsage
 import com.example.focus.data.usage.DefaultCategoryRules
+import com.example.focus.data.usage.TimelineBlock
+import com.example.focus.data.usage.TimelineBuilder
 import com.example.focus.data.usage.UsageStatsRepository
 import com.example.focus.ui.formatDurationCompact
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -39,20 +42,6 @@ data class CategoryUsage(
     val colorHex: String,
     val totalMs: Long,
 )
-
-/** 合并后的时间块（相邻同类区间合并而来） */
-data class TimelineBlock(
-    val categoryId: Long,
-    val categoryName: String,
-    val colorHex: String,
-    val startMs: Long,
-    val endMs: Long,
-    val apps: List<String>,
-    /** 该块的生产力属性，用于决定能否被相邻块吸收 */
-    val productivity: ProductivityLevel = ProductivityLevel.NEUTRAL,
-) {
-    val durationMs: Long get() = endMs - startMs
-}
 
 /** 时间轴同步到日历的结果（供 UI 提示） */
 sealed interface TimelineSyncEvent {
@@ -155,7 +144,7 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
             val rules = ruleDao.getAll().associateBy { it.packageName }
 
             val meta = apps.associate { item ->
-                val resolved = resolveCategory(item.packageName, item.appName, rules)
+                val resolved = TimelineBuilder.resolveCategory(item.packageName, item.appName, rules)
                 val categoryId = resolved?.first ?: DefaultCategoryRules.CAT_OTHER
                 val level = resolved?.second ?: ProductivityLevel.NEUTRAL
                 val category = categories[categoryId]
@@ -169,7 +158,7 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
 
             val usage = apps
                 .groupBy { item ->
-                    resolveCategory(item.packageName, item.appName, rules)?.first
+                    TimelineBuilder.resolveCategory(item.packageName, item.appName, rules)?.first
                         ?: DefaultCategoryRules.CAT_OTHER
                 }
                 .map { (categoryId, list) ->
@@ -185,7 +174,7 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
                 .sortedByDescending { it.totalMs }
 
             // 时间轴：事件级区间 → 分类 → 合并成时间块
-            val timeline = buildTimeline(repo.loadDayIntervals(date), rules, categories)
+            val timeline = TimelineBuilder.build(repo.loadDayIntervals(date), rules, categories)
 
             _state.update {
                 it.copy(
@@ -200,122 +189,6 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
                 )
             }
         }
-    }
-
-    /**
-     * 把事件级 App 区间合并成时间块。
-     *
-     * 三级处理，兼顾紧凑与诚实：
-     * 1. 同一分类、间隔不超阈值的相邻区间拼成一块；
-     * 2. **仅「中性」小段**（如工具类的短暂切换）被相邻较长的块吸收——
-     *    专注/分心/个人的小段一律保留，否则会把刷手机的几分钟也算进学习时间；
-     * 3. 最终仍不足 minBlockMs 的不展示。
-     */
-    private fun buildTimeline(
-        intervals: List<AppUsageInterval>,
-        rules: Map<String, AppCategoryRule>,
-        categories: Map<Long, TimeCategory>,
-    ): List<TimelineBlock> {
-        val minSegmentMs = 30_000L        // 过滤 30 秒以下的误触
-        val minBlockMs = 60_000L          // 最终不足 1 分钟的不展示
-        val mergeGapMs = 2 * 60_000L      // 同类相邻间隔 2 分钟内则拼合
-        val absorbMs = 5 * 60_000L        // 不足 5 分钟的「中性」块才会被吸收
-
-        val classified = intervals
-            .filter { it.durationMs >= minSegmentMs }
-            .map { interval ->
-                val resolved = resolveCategory(interval.packageName, interval.appName, rules)
-                val categoryId = resolved?.first ?: DefaultCategoryRules.CAT_OTHER
-                val level = resolved?.second ?: ProductivityLevel.NEUTRAL
-                Triple(interval, categoryId, level)
-            }
-
-        // 第一级：合并同类相邻区间
-        val merged = mutableListOf<TimelineBlock>()
-        var index = 0
-        while (index < classified.size) {
-            val firstInterval = classified[index].first
-            val categoryId = classified[index].second
-            val level = classified[index].third
-            var end = firstInterval.endMs
-            val apps = mutableListOf(firstInterval.appName)
-            var next = index + 1
-            while (
-                next < classified.size &&
-                classified[next].second == categoryId &&
-                classified[next].first.startMs - end <= mergeGapMs
-            ) {
-                end = maxOf(end, classified[next].first.endMs)
-                apps += classified[next].first.appName
-                next++
-            }
-            val category = categories[categoryId]
-            merged += TimelineBlock(
-                categoryId = categoryId,
-                categoryName = category?.name ?: "其他",
-                colorHex = category?.colorHex ?: "#B8AFA6",
-                startMs = firstInterval.startMs,
-                endMs = end,
-                apps = apps.distinct(),
-                productivity = level,
-            )
-            index = next
-        }
-
-        // 第二级：仅中性的小段被相邻较长的块吸收
-        val absorbed = mutableListOf<TimelineBlock>()
-        var i = 0
-        while (i < merged.size) {
-            val block = merged[i]
-            val absorbable = block.productivity == ProductivityLevel.NEUTRAL &&
-                block.durationMs < absorbMs
-            if (!absorbable) {
-                absorbed += block
-                i++
-                continue
-            }
-            val prev = absorbed.lastOrNull()
-            val following = merged.getOrNull(i + 1)
-            when {
-                prev != null && (following == null || prev.durationMs >= following.durationMs) -> {
-                    absorbed[absorbed.size - 1] = prev.copy(
-                        endMs = block.endMs,
-                        apps = (prev.apps + block.apps).distinct(),
-                    )
-                    i++
-                }
-
-                following != null -> {
-                    absorbed += following.copy(
-                        startMs = block.startMs,
-                        apps = (block.apps + following.apps).distinct(),
-                    )
-                    i += 2
-                }
-
-                else -> {
-                    absorbed += block
-                    i++
-                }
-            }
-        }
-
-        // 第三级：过滤仍过短的块
-        return absorbed.filter { it.durationMs >= minBlockMs }
-    }
-
-    /** 用户规则 > 内置默认规则 > null（未分类） */
-    private fun resolveCategory(
-        packageName: String,
-        appName: String,
-        rules: Map<String, AppCategoryRule>,
-    ): Pair<Long, ProductivityLevel>? {
-        rules[packageName]?.let { rule ->
-            val level = runCatching { ProductivityLevel.valueOf(rule.productivity) }
-                .getOrDefault(ProductivityLevel.NEUTRAL)
-            return rule.categoryId to level
-        }
-        return DefaultCategoryRules.match(appName, packageName)
     }
 
     fun moveDay(offsetDays: Long) {        val target = _state.value.selectedDate.plusDays(offsetDays)
@@ -389,25 +262,22 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
 
     private var pendingTimelineSync = false
 
-    /** 把当天的时间轴（按分类合并后的块）写入系统日历 */
+    /** 把当天的内容（专注 App 时段 + 分类时间块）写入系统日历 */
     fun syncTimelineToCalendar() {
         val snapshot = _state.value
-        val blocks = snapshot.timeline
-        if (blocks.isEmpty()) return
         if (!calendarSyncManager.hasCalendarPermission()) {
             pendingTimelineSync = true
             _syncEvent.value = TimelineSyncEvent.NeedPermission
             return
         }
-        doSyncTimeline(snapshot.selectedDate, blocks)
+        doSyncTimeline(snapshot.selectedDate)
     }
 
     /** UI 获得日历权限后回调，继续未完成的同步 */
     fun onCalendarPermissionGranted() {
         if (!pendingTimelineSync) return
         pendingTimelineSync = false
-        val snapshot = _state.value
-        doSyncTimeline(snapshot.selectedDate, snapshot.timeline)
+        doSyncTimeline(_state.value.selectedDate)
     }
 
     fun onCalendarPermissionDenied() {
@@ -419,36 +289,24 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
     }
 
     /**
-     * 先清掉当天旧的块事件再重建——时间块会随分类规则变化而重组，
-     * 不做整体替换会残留上一版的旧块。
+     * 手动同步：与自动同步走同一个规划器（全量内容：专注 App 时段 + 分类时间块），
+     * 先清掉当天旧事件再重建，保证两条路径产出一致。
      */
-    private fun doSyncTimeline(date: LocalDate, blocks: List<TimelineBlock>) {
+    private fun doSyncTimeline(date: LocalDate) {
         viewModelScope.launch {
-            val dateStr = date.toString()
-            // 用户在设置里关掉的分类不写入日历
-            val excluded = settingsStore.settings.first().excludedCalendarCategories
-            val toSync = blocks.filter { it.categoryId.toString() !in excluded }
-            if (toSync.isEmpty()) {
-                _syncEvent.value = TimelineSyncEvent.Failed("当前分类都关闭了日历同步")
-                return@launch
-            }
-            calendarSyncManager.clearTimelineEvents(dateStr)
-            var count = 0
-            toSync.forEachIndexed { index, block ->
-                val eventId = calendarSyncManager.insertTimelineBlock(
-                    date = dateStr,
-                    index = index,
-                    title = "${block.categoryName} · ${formatDurationCompact(block.durationMs)}",
-                    description = block.apps.joinToString("、"),
-                    startMs = block.startMs,
-                    endMs = block.endMs,
-                )
-                if (eventId != null) count++
-            }
+            val settings = settingsStore.settings.first()
+            val count = syncDayToCalendar(
+                context = getApplication(),
+                date = date,
+                includeFocusApp = true,
+                includeAppUsage = true,
+                excludedCategories = settings.excludedCalendarCategories,
+                switchToleranceMinutes = settings.switchToleranceMinutes,
+            )
             _syncEvent.value = if (count > 0) {
                 TimelineSyncEvent.Done(count)
             } else {
-                TimelineSyncEvent.Failed("没有写入日历，请确认系统日历可用")
+                TimelineSyncEvent.Failed("没有可写入的内容，或系统日历不可用")
             }
         }
     }

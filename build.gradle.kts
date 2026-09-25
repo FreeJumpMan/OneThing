@@ -8,15 +8,17 @@ plugins {
 /*
  * 构建目录隔离。
  *
- * 项目放在共享目录里，Linux 与 Windows 若共用同一个 build/ 目录，
- * Kotlin 增量编译缓存中的路径格式会互相冲突
- * （Windows 会把 Linux 的 /mnt/... 当作相对路径而报错）。
+ * 项目放在共享目录（VMware hgfs）里，若 Linux 与 Windows 共用同一个 build/：
+ * 1. Kotlin 增量缓存里的路径格式会冲突（Windows 会把 /mnt/... 当作相对路径而报错）；
+ * 2. hgfs 偶发读取 .class 文件失败（size 返回 -1）。
  *
- * 因此：命令行构建时设环境变量 YISHI_LINUX_BUILD=1，产物单独落到 .build-linux/；
- * Android Studio 侧不设该变量，继续使用默认 build/，两边互不干扰。
+ * 因此命令行构建时用环境变量把产物指到**本地磁盘**（非共享目录）：
+ *   export YISHI_LINUX_BUILD_DIR=$HOME/.yishi-build
+ * Android Studio 侧不设该变量，继续用项目内默认 build/，两边互不干扰。
  */
-if (System.getenv("YISHI_LINUX_BUILD") == "1") {
+val linuxBuildDir = System.getenv("YISHI_LINUX_BUILD_DIR")
+if (!linuxBuildDir.isNullOrBlank()) {
     allprojects {
-        layout.buildDirectory.set(file("${rootDir}/.build-linux/${name}"))
+        layout.buildDirectory.set(file("$linuxBuildDir/${name}"))
     }
 }

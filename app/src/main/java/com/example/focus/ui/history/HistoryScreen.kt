@@ -118,6 +118,7 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     val autoRecords by viewModel.autoRecords.collectAsState()
     val syncedIds by viewModel.syncedIds.collectAsState()
     val syncUndo by viewModel.syncUndo.collectAsState()
+    val hiddenUndo by viewModel.hiddenUndo.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // 从后台切回时重新拉取系统使用记录（专注 App 自动记录为实时派生数据，不落库）
@@ -138,6 +139,9 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     var collapsed by rememberSaveable { mutableStateOf(true) }
     var deleteTarget by remember { mutableStateOf<FocusSession?>(null) }
     var editingSession by remember { mutableStateOf<FocusSession?>(null) }
+    // 自动记录（派生数据）没有自己的行，删除/编辑走单独的状态
+    var autoDeleteTarget by remember { mutableStateOf<AutoRecord?>(null) }
+    var editingAuto by remember { mutableStateOf<AutoRecord?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var showDebugDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -388,6 +392,8 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                             auto = true,
                             isFirst = index == 0,
                             isLast = index == timelineEntries.lastIndex,
+                            onEdit = { editingAuto = entry.record },
+                            onDelete = { autoDeleteTarget = entry.record },
                         )
                     }
                 }
@@ -397,39 +403,45 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
 
     // 一键同步后的撤回浮条（6 秒后自动收起）
     syncUndo?.let { undo ->
-        LaunchedEffect(undo) {
-            delay(6000)
-            viewModel.dismissSyncUndo()
-        }
-        Popup(alignment = Alignment.BottomCenter) {
-            Box(modifier = Modifier.padding(bottom = 28.dp)) {
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    shape = RoundedCornerShape(16.dp),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "已同步 ${undo.count} 条到日历",
-                            fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        TextButton(onClick = { viewModel.undoLastSync() }) {
-                            Text(
-                                text = "撤回",
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.primary,
-                            )
-                        }
-                    }
-                }
-            }
-        }
+        UndoBar(
+            key = undo,
+            text = "已同步 ${undo.count} 条到日历",
+            onUndo = { viewModel.undoLastSync() },
+            onTimeout = { viewModel.dismissSyncUndo() },
+        )
+    }
+
+    // 隐藏自动记录后的撤销浮条
+    hiddenUndo?.let { undo ->
+        UndoBar(
+            key = undo,
+            text = "已隐藏「${undo.label}」",
+            onUndo = { viewModel.undoHideAutoRecord() },
+            onTimeout = { viewModel.dismissHiddenUndo() },
+        )
+    }
+
+    // 删除自动记录的确认（数据来自系统，只能隐藏）
+    autoDeleteTarget?.let { record ->
+        AlertDialog(
+            onDismissRequest = { autoDeleteTarget = null },
+            title = { Text("删除这条自动记录？") },
+            text = {
+                Text(
+                    "它来自系统使用记录，删掉后不再出现在时间线（可立即撤销）。\n" +
+                        "如果只是想改个名字，用「编辑」。"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.hideAutoRecord(record)
+                    autoDeleteTarget = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { autoDeleteTarget = null }) { Text("取消") }
+            },
+        )
     }
 
     // 删除确认对话框：已同步的记录可选用是否同时删日历事件
@@ -472,7 +484,10 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     // 编辑记录对话框
     editingSession?.let { session ->
         SessionEditDialog(
-            initial = session,
+            title = "编辑记录",
+            initialName = session.name,
+            initialStartMs = session.startTimeMs,
+            initialEndMs = session.endTimeMs,
             onDismiss = { editingSession = null },
             onSave = { name, startMs, endMs ->
                 viewModel.updateSession(session, name, startMs, endMs)
@@ -481,10 +496,31 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
         )
     }
 
+    // 编辑自动记录：保存后转为一条真实记录（原自动段一并隐藏）
+    editingAuto?.let { record ->
+        SessionEditDialog(
+            title = "编辑自动记录",
+            hint = "自动记录来自系统使用记录，不能就地改。保存后会变成一条记录，" +
+                "可以继续编辑、删除或同步到日历。",
+            initialName = record.displayName,
+            initialStartMs = record.startMs,
+            initialEndMs = record.endMs,
+            onDismiss = { editingAuto = null },
+            onSave = { name, startMs, endMs ->
+                viewModel.convertAutoRecord(record, name, startMs, endMs)
+                editingAuto = null
+            },
+        )
+    }
+
     // 手动添加记录对话框
     if (showAddDialog) {
+        val nowMs = remember(showAddDialog) { System.currentTimeMillis() }
         SessionEditDialog(
-            initial = null,
+            title = "添加记录",
+            initialName = "",
+            initialStartMs = nowMs,
+            initialEndMs = nowMs + 3_600_000,
             onDismiss = { showAddDialog = false },
             onSave = { name, startMs, endMs ->
                 viewModel.addSession(name, startMs, endMs)
@@ -546,6 +582,44 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     }
 }
 
+/** 底部浮条：一句话 + 一个立即撤销按钮，6 秒后自动收起 */
+@Composable
+private fun UndoBar(key: Any?, text: String, onUndo: () -> Unit, onTimeout: () -> Unit) {
+    LaunchedEffect(key) {
+        delay(6000)
+        onTimeout()
+    }
+    Popup(alignment = Alignment.BottomCenter) {
+        Box(modifier = Modifier.padding(bottom = 28.dp)) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                shape = RoundedCornerShape(16.dp),
+                elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = text,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    TextButton(onClick = onUndo) {
+                        Text(
+                            text = "撤销",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** 时间线条目：计时记录与「专注 App 自动记录」的统一包装（列表按开始时间排序） */
 private sealed interface TimelineEntry {
     val key: String
@@ -580,7 +654,8 @@ private fun buildTimelineEntries(
 /**
  * 时间线形式的单条记录：左侧开始时间、中间竖线与节点、右侧事项名与时长。
  * isFirst / isLast 控制竖线首尾不伸出。
- * auto = true 表示「专注 App 自动记录」：空心节点、无操作菜单，仅作展示。
+ * auto = true 表示「专注 App 自动记录」：空心节点、右侧标「自动」。
+ * 这种记录是派生数据，只能编辑（转为一条记录）或删除（隐藏），不能同步。
  */
 @Composable
 private fun TimelineRow(
@@ -682,15 +757,15 @@ private fun TimelineRow(
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.outline,
                     )
-                } else {
-                    if (synced) {
-                        Text(
-                            text = "已同步",
-                            fontSize = 10.sp,
-                            color = Color(0xFF48B59B),
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                    }
+                } else if (synced) {
+                    Text(
+                        text = "已同步",
+                        fontSize = 10.sp,
+                        color = Color(0xFF48B59B),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+                if (onEdit != null || onDelete != null) {
                     Box {
                         IconButton(
                             onClick = { menuOpen = true },
@@ -714,14 +789,17 @@ private fun TimelineRow(
                                     onEdit?.invoke()
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text(if (synced) "已同步到日历" else "同步到日历") },
-                                enabled = !synced,
-                                onClick = {
-                                    menuOpen = false
-                                    onSync?.invoke()
-                                },
-                            )
+                            // 自动记录没有对应的日历事件，不提供同步
+                            if (!auto) {
+                                DropdownMenuItem(
+                                    text = { Text(if (synced) "已同步到日历" else "同步到日历") },
+                                    enabled = !synced,
+                                    onClick = {
+                                        menuOpen = false
+                                        onSync?.invoke()
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("删除") },
                                 onClick = {
@@ -744,34 +822,42 @@ private fun TimelineRow(
 }
 
 /**
- * 编辑/添加记录对话框。
- * initial 为 null 时是手动添加（默认开始=当前时间，时长 1 小时）。
+ * 编辑/添加记录对话框。标题与初值由调用方给（记录、手动添加、自动记录转为记录都用它）。
  * 名称必填，结束时间必须晚于开始时间。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SessionEditDialog(
-    initial: FocusSession?,
+    title: String,
+    initialName: String,
+    initialStartMs: Long,
+    initialEndMs: Long,
+    hint: String? = null,
     onDismiss: () -> Unit,
     onSave: (name: String, startMs: Long, endMs: Long) -> Unit,
 ) {
-    val now = remember { System.currentTimeMillis() }
-    val defaultStart = initial?.startTimeMs ?: now
-    val defaultEnd = initial?.endTimeMs ?: (now + 3_600_000)
-
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var startDate by remember { mutableStateOf(toLocalDate(defaultStart)) }
-    var startTime by remember { mutableStateOf(toLocalTime(defaultStart)) }
-    var endDate by remember { mutableStateOf(toLocalDate(defaultEnd)) }
-    var endTime by remember { mutableStateOf(toLocalTime(defaultEnd)) }
+    var name by remember { mutableStateOf(initialName) }
+    var startDate by remember { mutableStateOf(toLocalDate(initialStartMs)) }
+    var startTime by remember { mutableStateOf(toLocalTime(initialStartMs)) }
+    var endDate by remember { mutableStateOf(toLocalDate(initialEndMs)) }
+    var endTime by remember { mutableStateOf(toLocalTime(initialEndMs)) }
     var picking by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (initial == null) "添加记录" else "编辑记录") },
+        title = { Text(title) },
         text = {
             Column {
+                hint?.let {
+                    Text(
+                        text = it,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },

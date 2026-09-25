@@ -6,6 +6,7 @@ import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.CalendarSync
 import com.example.focus.data.db.FocusApp
 import com.example.focus.data.db.FocusSession
+import com.example.focus.data.db.HiddenUsageSegment
 import com.example.focus.data.db.TimeCategory
 import com.example.focus.data.db.TimelineEvent
 import com.example.focus.data.db.TodoItem
@@ -59,8 +60,9 @@ class BackupManager(
          * 备份格式版本。
          * v1：专注记录 / 事项 / 日历映射 / 时间块映射
          * v2：新增时间分类、分类规则、专注 App 与设置项
+         * v3：新增「被隐藏的自动记录」
          */
-        private const val FORMAT_VERSION = 2
+        private const val FORMAT_VERSION = 3
         private const val APP_TAG = "一事"
     }
 
@@ -74,6 +76,7 @@ class BackupManager(
         val focusApps: List<FocusApp>,
         val calendarSyncs: List<CalendarSync>,
         val timelineEvents: List<TimelineEvent>,
+        val hiddenSegments: List<HiddenUsageSegment>,
         val settings: AppSettings?,
         val presentKeys: Set<String>,
     )
@@ -166,6 +169,16 @@ class BackupManager(
         }
         root.put("timelineEvents", timelines)
 
+        val hidden = JSONArray()
+        db.hiddenUsageSegmentDao().getAllOnce().forEach { h ->
+            hidden.put(JSONObject().apply {
+                put("startMs", h.startMs)
+                put("endMs", h.endMs)
+                put("appName", h.appName)
+            })
+        }
+        root.put("hiddenUsageSegments", hidden)
+
         root.put("settings", settingsToJson(settingsStore.settings.first()))
 
         root.toString(2)
@@ -225,6 +238,10 @@ class BackupManager(
                             db.focusAppDao().upsertAll(parsed.focusApps)
                         }
                     }
+                    replaceTable(parsed.presentKeys, "hiddenUsageSegments") {
+                        db.hiddenUsageSegmentDao().clear()
+                        parsed.hiddenSegments.forEach { db.hiddenUsageSegmentDao().insert(it) }
+                    }
 
                     // 映射表是派生数据：旧记录已被替换，映射一律作废先清空
                     db.calendarSyncDao().clear()
@@ -277,6 +294,7 @@ class BackupManager(
         val focusAppArr = root.optJSONArray("focusApps") ?: JSONArray()
         val syncArr = root.optJSONArray("calendarSyncs") ?: JSONArray()
         val timelineArr = root.optJSONArray("timelineEvents") ?: JSONArray()
+        val hiddenArr = root.optJSONArray("hiddenUsageSegments") ?: JSONArray()
 
         val sessions = (0 until sessionArr.length()).map { i ->
             val o = objectAt(sessionArr, i, "专注记录")
@@ -363,6 +381,18 @@ class BackupManager(
         // 设置段（v1 备份没有）
         val settings = root.optJSONObject("settings")?.let { parseSettings(it) }
 
+        val hiddenSegments = (0 until hiddenArr.length()).map { i ->
+            val o = objectAt(hiddenArr, i, "隐藏的自动记录")
+            rowGuard("隐藏的自动记录", i) {
+                HiddenUsageSegment(
+                    id = o.optLong("id", 0L),
+                    startMs = o.getLong("startMs"),
+                    endMs = o.getLong("endMs"),
+                    appName = o.optString("appName", ""),
+                )
+            }
+        }
+
         val summary = BackupSummary(
             exportedAt = root.optString("exportedAt", "未知"),
             formatVersion = formatVersion,
@@ -384,6 +414,7 @@ class BackupManager(
             focusApps = focusApps,
             calendarSyncs = calendarSyncs,
             timelineEvents = timelineEvents,
+            hiddenSegments = hiddenSegments,
             settings = settings,
             presentKeys = presentKeys,
         )

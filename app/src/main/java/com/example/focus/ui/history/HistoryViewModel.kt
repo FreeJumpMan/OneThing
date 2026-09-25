@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.focus.data.db.AppDatabase
 import com.example.focus.data.db.FocusSession
+import com.example.focus.data.db.HiddenUsageSegment
 import com.example.focus.data.prefs.SettingsStore
 import com.example.focus.data.repo.SessionRepository
 import com.example.focus.data.sync.CalendarSyncManager
@@ -52,6 +53,12 @@ data class SyncUndoState(
     val sessionIds: List<Long>,
 )
 
+/** 隐藏自动记录的撤销凭据 */
+data class HiddenUndo(
+    val id: Long,
+    val label: String,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -64,6 +71,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val usageRepo = UsageStatsRepository(application)
     private val settingsStore = SettingsStore(application)
     private val focusAppDao = AppDatabase.get(application).focusAppDao()
+    private val hiddenSegmentDao = AppDatabase.get(application).hiddenUsageSegmentDao()
 
     val currentMonth = MutableStateFlow(YearMonth.now())
     val selectedDate = MutableStateFlow(LocalDate.now())
@@ -108,8 +116,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             focusPackages,
             selectedDaySessions,
             autoRefreshTick,
-        ) { date, packages, sessions, _ ->
-            loadAutoRecords(date, packages, sessions)
+            hiddenSegmentDao.observeAll(),
+        ) { date, packages, sessions, _, hidden ->
+            loadAutoRecords(date, packages, sessions, hidden)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     /** 界面回到前台时调用：自动记录不落库，需要主动刷新系统数据 */
@@ -278,6 +287,64 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /** 最近一次「隐藏自动记录」的撤销状态 */
+    private val _hiddenUndo = MutableStateFlow<HiddenUndo?>(null)
+    val hiddenUndo: StateFlow<HiddenUndo?> = _hiddenUndo.asStateFlow()
+
+    /**
+     * 隐藏一段自动记录。
+     * 自动记录是从系统使用记录实时派生的，改不了源数据，所以「删除」= 记下这个区间不再展示。
+     */
+    fun hideAutoRecord(record: AutoRecord) {
+        viewModelScope.launch {
+            val id = hiddenSegmentDao.insert(
+                HiddenUsageSegment(
+                    startMs = record.startMs,
+                    endMs = record.endMs,
+                    appName = record.displayName,
+                )
+            )
+            _hiddenUndo.value = HiddenUndo(id = id, label = record.displayName)
+        }
+    }
+
+    /** 撤销删除：把隐藏记录移除，那段自动记录会重新出现 */
+    fun undoHideAutoRecord() {
+        val undo = _hiddenUndo.value ?: return
+        _hiddenUndo.value = null
+        viewModelScope.launch { hiddenSegmentDao.deleteById(undo.id) }
+    }
+
+    fun dismissHiddenUndo() {
+        _hiddenUndo.value = null
+    }
+
+    /**
+     * 把一段自动记录改成一条真实记录（可改名称与起止时间）。
+     * 原自动段一并隐藏，避免转完还在时间线上出现两条。
+     * 新记录与手动添加的一样，可以继续编辑、删除、同步到日历。
+     */
+    fun convertAutoRecord(record: AutoRecord, name: String, startMs: Long, endMs: Long) {
+        viewModelScope.launch {
+            hiddenSegmentDao.insert(
+                HiddenUsageSegment(
+                    startMs = record.startMs,
+                    endMs = record.endMs,
+                    appName = record.displayName,
+                )
+            )
+            repo.insert(
+                FocusSession(
+                    name = name,
+                    startTimeMs = startMs,
+                    endTimeMs = endMs,
+                    durationMs = endMs - startMs,
+                    date = formatDate(startMs),
+                )
+            )
+        }
+    }
+
     fun delete(session: FocusSession, deleteCalendarEvent: Boolean = true) {
         viewModelScope.launch {
             repo.delete(session)
@@ -342,6 +409,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         date: LocalDate,
         packages: Set<String>,
         sessions: List<FocusSession>,
+        hidden: List<HiddenUsageSegment>,
     ): List<AutoRecord> {
         if (packages.isEmpty() || !usageRepo.hasUsageAccess()) return emptyList()
 
@@ -370,6 +438,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 sessionIntervals,
             )
                 .filter { it.durationMs >= minDisplayMs }
+                // 被删掉的自动记录：与隐藏区间重叠过半就整段不展示
+                .filter { remaining -> hidden.none { overlapsMostly(remaining, it) } }
                 .map { remaining ->
                     AutoRecord(
                         appNames = segment.appNames,
@@ -382,6 +452,12 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
     fun clearError() {
         _error.value = null
+    }
+
+    /** 片段与隐藏区间的重叠是否超过自身一半（允许系统数据轻微偏移，不必精确相等） */
+    private fun overlapsMostly(piece: TimeInterval, hidden: HiddenUsageSegment): Boolean {
+        val overlap = minOf(piece.endMs, hidden.endMs) - maxOf(piece.startMs, hidden.startMs)
+        return overlap * 2 >= piece.durationMs
     }
 
     // ===== 诊断：探查国产 ROM 日历自定义字段 =====

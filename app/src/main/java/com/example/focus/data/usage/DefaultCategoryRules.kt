@@ -14,37 +14,31 @@ import com.example.focus.data.db.TimeCategory
  */
 object DefaultCategoryRules {
 
-    // 内置分类的固定 id，便于默认规则引用
+    // 内置分类的固定 id，便于默认规则引用。
+    // id 保持历史值不重排（1/2/3/5/8 不连续是有意的）：
+    // 老用户库里这些 id 已被规则引用，换分类集合只改名不换号，避免映射错位。
     const val CAT_LEARNING = 1L
     const val CAT_SOCIAL = 2L
-    const val CAT_VIDEO = 3L
-    const val CAT_MUSIC = 4L
+    const val CAT_ENTERTAINMENT = 3L
     const val CAT_TOOLS = 5L
-    const val CAT_BROWSE = 6L
-    const val CAT_GAME = 7L
     const val CAT_OTHER = 8L
 
-    /** 内置分类，首次启动时写入数据库 */
+    /** 内置分类（首次启动时写入数据库）：只保留最常用的五个 */
     val CATEGORIES = listOf(
         TimeCategory(CAT_LEARNING, "学习", "#4A6B4A", 0, true),
         TimeCategory(CAT_SOCIAL, "社交", "#FFB547", 1, true),
-        TimeCategory(CAT_VIDEO, "刷视频", "#FF684A", 2, true),
-        TimeCategory(CAT_MUSIC, "音乐", "#6FBFA0", 3, true),
-        TimeCategory(CAT_TOOLS, "工具", "#8E8A88", 4, true),
-        TimeCategory(CAT_BROWSE, "浏览", "#537D96", 5, true),
-        TimeCategory(CAT_GAME, "游戏", "#8B2C1F", 6, true),
-        TimeCategory(CAT_OTHER, "其他", "#B8AFA6", 7, true),
+        TimeCategory(CAT_ENTERTAINMENT, "娱乐", "#FF684A", 2, true),
+        TimeCategory(CAT_TOOLS, "工具", "#8E8A88", 3, true),
+        TimeCategory(CAT_OTHER, "其他", "#B8AFA6", 4, true),
     )
 
     /** 包名精确匹配（少量知名 App，优先级高于关键词） */
     private val BY_PACKAGE: Map<String, Pair<Long, ProductivityLevel>> = mapOf(
         "com.tencent.mm" to (CAT_SOCIAL to ProductivityLevel.DISTRACTING),
         "com.tencent.mobileqq" to (CAT_SOCIAL to ProductivityLevel.DISTRACTING),
-        "com.ss.android.ugc.aweme" to (CAT_VIDEO to ProductivityLevel.DISTRACTING),
-        "tv.danmaku.bili" to (CAT_VIDEO to ProductivityLevel.DISTRACTING),
-        "com.netease.cloudmusic" to (CAT_MUSIC to ProductivityLevel.PERSONAL),
-        "com.android.chrome" to (CAT_BROWSE to ProductivityLevel.NEUTRAL),
-        "com.microsoft.emmx" to (CAT_BROWSE to ProductivityLevel.NEUTRAL),
+        "com.ss.android.ugc.aweme" to (CAT_ENTERTAINMENT to ProductivityLevel.DISTRACTING),
+        "tv.danmaku.bili" to (CAT_ENTERTAINMENT to ProductivityLevel.DISTRACTING),
+        "com.netease.cloudmusic" to (CAT_ENTERTAINMENT to ProductivityLevel.PERSONAL),
     )
 
     /** 名称关键词匹配：命中即归类（顺序敏感，先具体后宽泛） */
@@ -59,17 +53,10 @@ object DefaultCategoryRules {
         // 社交
         listOf("微信", "wechat", "qq", "钉钉", "飞书", "telegram", "微博", "知乎", "小红书") to (CAT_SOCIAL to ProductivityLevel.DISTRACTING),
 
-        // 刷视频
-        listOf("抖音", "快手", "哔哩", "bilibili", "视频", "影视", "腾讯视频", "爱奇艺", "优酷", "直播") to (CAT_VIDEO to ProductivityLevel.DISTRACTING),
-
-        // 音乐
-        listOf("音乐", "网易云", "喜马拉雅", "播客", "fm", "radio", "听书") to (CAT_MUSIC to ProductivityLevel.PERSONAL),
-
-        // 游戏
-        listOf("游戏", "game", "原神", "王者", "和平精英", "米哈游", "mihoyo") to (CAT_GAME to ProductivityLevel.DISTRACTING),
-
-        // 浏览
-        listOf("浏览器", "browser", "chrome", "edge", "firefox", "夸克") to (CAT_BROWSE to ProductivityLevel.NEUTRAL),
+        // 娱乐（刷视频 / 游戏 / 音乐合并为一类）
+        listOf("抖音", "快手", "哔哩", "bilibili", "视频", "影视", "腾讯视频", "爱奇艺", "优酷", "直播") to (CAT_ENTERTAINMENT to ProductivityLevel.DISTRACTING),
+        listOf("游戏", "game", "原神", "王者", "和平精英", "米哈游", "mihoyo") to (CAT_ENTERTAINMENT to ProductivityLevel.DISTRACTING),
+        listOf("音乐", "网易云", "喜马拉雅", "播客", "fm", "radio", "听书") to (CAT_ENTERTAINMENT to ProductivityLevel.PERSONAL),
 
         // 工具（系统类 App 大多落这里）
         listOf("相机", "相册", "图库", "文件", "日历", "天气", "计算器", "设置", "时钟", "闹钟", "邮件", "输入法", "钱包", "支付", "地图", "导航") to (CAT_TOOLS to ProductivityLevel.NEUTRAL),

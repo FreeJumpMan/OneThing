@@ -17,6 +17,8 @@ data class PlannedCalendarEvent(
     val description: String,
     val startMs: Long,
     val endMs: Long,
+    /** 事件级颜色（分类色）；null = 跟随日历默认色 */
+    val color: Int? = null,
 )
 
 /**
@@ -84,7 +86,7 @@ class DayCalendarPlanner(private val context: Context) {
             }
         }
 
-        // ② App 使用时间块（减去已占用，保证同一段时间只出现一次）
+        // ② App 使用时间块：先减已占用，再聚合成「会话」——日历上要轮廓，不要流水账
         if (includeAppUsage) {
             val categories = db.timeCategoryDao().getAll().associateBy { it.id }
             val rules = db.appCategoryRuleDao().getAll().associateBy { it.packageName }
@@ -93,6 +95,7 @@ class DayCalendarPlanner(private val context: Context) {
                 rules,
                 categories,
             )
+            val pieces = mutableListOf<CalmPiece>()
             blocks.forEach { block ->
                 if (block.categoryId.toString() in excludedCategories) return@forEach
                 IntervalMerger.subtract(
@@ -100,24 +103,91 @@ class DayCalendarPlanner(private val context: Context) {
                     occupied,
                 ).forEach { remains ->
                     if (remains.durationMs >= MIN_EVENT_MS) {
-                        events += PlannedCalendarEvent(
-                            title = "${block.categoryName} · " +
-                                formatCompactDuration(remains.durationMs),
-                            description = block.apps.joinToString("、"),
+                        pieces += CalmPiece(
+                            categoryName = block.categoryName,
+                            colorHex = block.colorHex,
                             startMs = remains.startMs,
                             endMs = remains.endMs,
                         )
                     }
                 }
             }
+            events += mergeIntoCalmSessions(pieces)
         }
 
         events.sortedBy { it.startMs }
     }
 
+    /** 聚合用的碎片：分类名 + 分类色 + 时间区间 */
+    private data class CalmPiece(
+        val categoryName: String,
+        val colorHex: String,
+        val startMs: Long,
+        val endMs: Long,
+    ) {
+        val durationMs: Long get() = endMs - startMs
+    }
+
+    /**
+     * 把碎片聚合成「会话」：间隔不超过 [CALM_GAP_MS] 的相邻碎片连成一段，
+     * 取占时最长的分类作为主活动，构成明细写进事件描述。
+     * 合计不足 [CALM_MIN_MS] 的会话不返回——日历要的是轮廓，不是流水账。
+     */
+    private fun mergeIntoCalmSessions(pieces: List<CalmPiece>): List<PlannedCalendarEvent> {
+        if (pieces.isEmpty()) return emptyList()
+        val sorted = pieces.sortedBy { it.startMs }
+        val result = mutableListOf<PlannedCalendarEvent>()
+        var index = 0
+        while (index < sorted.size) {
+            var start = sorted[index].startMs
+            var end = sorted[index].endMs
+            val totals = mutableMapOf<String, Long>()
+            val colorOf = mutableMapOf<String, String>()
+            fun collect(piece: CalmPiece) {
+                totals[piece.categoryName] =
+                    (totals[piece.categoryName] ?: 0L) + piece.durationMs
+                colorOf.putIfAbsent(piece.categoryName, piece.colorHex)
+            }
+            collect(sorted[index])
+            var next = index + 1
+            while (next < sorted.size && sorted[next].startMs - end <= CALM_GAP_MS) {
+                end = maxOf(end, sorted[next].endMs)
+                collect(sorted[next])
+                next++
+            }
+            val total = totals.values.sum()
+            if (total >= CALM_MIN_MS) {
+                val main = totals.maxByOrNull { it.value }
+                if (main != null) {
+                    result += PlannedCalendarEvent(
+                        title = "${main.key} · ${formatCompactDuration(total)}",
+                        description = "构成：" + totals.entries
+                            .sortedByDescending { it.value }
+                            .joinToString("、") { "${it.key} ${formatCompactDuration(it.value)}" },
+                        startMs = start,
+                        endMs = end,
+                        color = colorOf[main.key]?.let { parseColorOrNull(it) },
+                    )
+                }
+            }
+            index = next
+        }
+        return result
+    }
+
+    /** 分类色 hex → 事件颜色 int；非法值返回 null（跟随日历默认色） */
+    private fun parseColorOrNull(hex: String): Int? =
+        runCatching { android.graphics.Color.parseColor(hex) }.getOrNull()
+
     private companion object {
         /** 不足 1 分钟的事件不写入日历 */
         const val MIN_EVENT_MS = 60_000L
+
+        /** 会话聚合：碎片间隔不超过该值时连成一段 */
+        const val CALM_GAP_MS = 10 * 60_000L
+
+        /** 会话聚合：合计时长不足该值不写入日历 */
+        const val CALM_MIN_MS = 5 * 60_000L
     }
 }
 
@@ -172,6 +242,7 @@ suspend fun syncDayToCalendar(
             description = event.description,
             startMs = event.startMs,
             endMs = event.endMs,
+            color = event.color,
         )
         if (eventId != null) count++
     }

@@ -47,6 +47,12 @@ data class AutoRecord(
     val displayName: String get() = appNames.joinToString("、")
 }
 
+/** 「一键同步」的撤回凭据：本次写入的条数与会话 id */
+data class SyncUndoState(
+    val count: Int,
+    val sessionIds: List<Long>,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -130,6 +136,25 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    /** 最近一次「一键同步」的撤回状态（同步成功后出现，用于底部浮条） */
+    private val _syncUndo = MutableStateFlow<SyncUndoState?>(null)
+    val syncUndo: StateFlow<SyncUndoState?> = _syncUndo.asStateFlow()
+
+    /** 撤回最近一次「一键同步」：删掉本次创建的事件与映射 */
+    fun undoLastSync() {
+        val state = _syncUndo.value ?: return
+        _syncUndo.value = null
+        viewModelScope.launch {
+            state.sessionIds.forEach { id ->
+                runCatching { syncManager.removeSessionEvents(id) }
+            }
+        }
+    }
+
+    fun dismissSyncUndo() {
+        _syncUndo.value = null
+    }
+
     /** 权限被永久拒绝（不再询问）时，引导用户去系统设置开启 */
     private val _showSettingsGuide = MutableStateFlow(false)
     val showSettingsGuide: StateFlow<Boolean> = _showSettingsGuide.asStateFlow()
@@ -191,6 +216,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     private fun syncSessionsToCalendar(sessions: List<FocusSession>) {
         viewModelScope.launch {
             var failure: String? = null
+            val syncedNow = mutableListOf<Long>()
             sessions.forEach { session ->
                 if (session.id in syncedIds.value) return@forEach
                 runCatching {
@@ -201,6 +227,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         endTimeMs = session.endTimeMs,
                         durationMs = session.durationMs,
                     )
+                }.onSuccess {
+                    syncedNow += session.id
                 }.onFailure { e ->
                     failure = if (e is SecurityException) {
                         "日历权限不足，请在系统设置中检查日历权限"
@@ -208,6 +236,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                         e.message ?: "同步到日历失败"
                     }
                 }
+            }
+            if (syncedNow.isNotEmpty()) {
+                _syncUndo.value = SyncUndoState(count = syncedNow.size, sessionIds = syncedNow)
             }
             failure?.let { _error.value = it }
         }

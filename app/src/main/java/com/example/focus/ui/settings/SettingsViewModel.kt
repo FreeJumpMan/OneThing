@@ -114,6 +114,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.setAutoSyncAppUsage(enabled) }
     }
 
+    /** 「一事 · 时间记录」专属日历的颜色 */
+    fun setTimelineCalendarColor(color: Int) {
+        viewModelScope.launch { store.setTimelineCalendarColor(color) }
+    }
+
     /** 加载最近 7 天用过的 App 作为专注 App 候选（含已标记的） */
     fun loadCandidates() {
         viewModelScope.launch {

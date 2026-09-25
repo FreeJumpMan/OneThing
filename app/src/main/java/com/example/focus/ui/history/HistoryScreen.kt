@@ -28,6 +28,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
@@ -82,6 +83,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -92,6 +94,7 @@ import com.example.focus.ui.components.MonthCalendar
 import com.example.focus.ui.formatDuration
 import com.example.focus.ui.formatDurationCompact
 import com.example.focus.ui.formatTimeOfDay
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -114,6 +117,7 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     val daySessions by viewModel.selectedDaySessions.collectAsState()
     val autoRecords by viewModel.autoRecords.collectAsState()
     val syncedIds by viewModel.syncedIds.collectAsState()
+    val syncUndo by viewModel.syncUndo.collectAsState()
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // 从后台切回时重新拉取系统使用记录（专注 App 自动记录为实时派生数据，不落库）
@@ -385,6 +389,43 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                             isFirst = index == 0,
                             isLast = index == timelineEntries.lastIndex,
                         )
+                    }
+                }
+            }
+        }
+    }
+
+    // 一键同步后的撤回浮条（6 秒后自动收起）
+    syncUndo?.let { undo ->
+        LaunchedEffect(undo) {
+            delay(6000)
+            viewModel.dismissSyncUndo()
+        }
+        Popup(alignment = Alignment.BottomCenter) {
+            Box(modifier = Modifier.padding(bottom = 28.dp)) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    shape = RoundedCornerShape(16.dp),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.padding(start = 18.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "已同步 ${undo.count} 条到日历",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        TextButton(onClick = { viewModel.undoLastSync() }) {
+                            Text(
+                                text = "撤回",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                        }
                     }
                 }
             }

@@ -29,6 +29,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -84,6 +85,7 @@ fun SettingsScreen(
     var showThemeDialog by remember { mutableStateOf(false) }
     var showToleranceDialog by remember { mutableStateOf(false) }
     var showCategorySyncDialog by remember { mutableStateOf(false) }
+    var showColorDialog by remember { mutableStateOf(false) }
     var showImportConfirm by remember { mutableStateOf(false) }
 
     // 从系统设置返回时刷新权限状态
@@ -242,13 +244,15 @@ fun SettingsScreen(
                     onCheckedChange = { viewModel.setAutoSyncAppUsage(it) },
                 )
                 SettingRow(
+                    title = "专属日历颜色",
+                    subtitle = "「一事 · 时间记录」日历的颜色，下次同步时生效",
+                    value = "选择",
+                    onClick = { showColorDialog = true },
+                )
+                SettingRow(
                     title = "同步的分类",
                     subtitle = "选择哪些分类的时间块写入日历",
-                    value = if (settings.excludedCalendarCategories.isEmpty()) {
-                        "全部"
-                    } else {
-                        "${settings.excludedCalendarCategories.size} 个已关闭"
-                    },
+                    value = "${categories.size - settings.excludedCalendarCategories.size} 个已开启",
                     onClick = { showCategorySyncDialog = true },
                 )
             }
@@ -333,6 +337,57 @@ fun SettingsScreen(
         }
 
         item { Spacer(modifier = Modifier.height(28.dp)) }
+    }
+
+    // 专属日历颜色选择
+    if (showColorDialog) {
+        AlertDialog(
+            onDismissRequest = { showColorDialog = false },
+            title = { Text("专属日历颜色") },
+            text = {
+                Column {
+                    Text(
+                        text = "「一事 · 时间记录」日历使用这个颜色，下次同步时生效。",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    CALENDAR_COLOR_OPTIONS.chunked(4).forEach { rowColors ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            rowColors.forEach { colorValue ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(44.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(colorValue))
+                                        .clickable {
+                                            viewModel.setTimelineCalendarColor(colorValue)
+                                            showColorDialog = false
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (colorValue == settings.timelineCalendarColor) {
+                                        Icon(
+                                            Icons.Outlined.Check,
+                                            contentDescription = "当前颜色",
+                                            tint = Color.White,
+                                            modifier = Modifier.size(22.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showColorDialog = false }) { Text("关闭") }
+            },
+        )
     }
 
     // 同步的分类选择
@@ -465,6 +520,18 @@ fun SettingsScreen(
         )
     }
 }
+
+/** 专属日历可选颜色（ARGB） */
+private val CALENDAR_COLOR_OPTIONS = listOf(
+    0xFFFF684A.toInt(),  // 珊瑚橙
+    0xFFFFB547.toInt(),  // 明黄
+    0xFF48B59B.toInt(),  // 青绿
+    0xFF537D96.toInt(),  // 灰蓝
+    0xFFE8768A.toInt(),  // 玫瑰粉
+    0xFF9B7EDE.toInt(),  // 淡紫
+    0xFFC97B5F.toInt(),  // 暖棕
+    0xFF8E8A88.toInt(),  // 石墨
+)
 
 /** 设置分组：小标题 + 细分隔线的条目区 */
 @Composable

@@ -33,6 +33,8 @@ data class AppSettings(
     val autoSyncCalendar: Boolean = false,
     /** 把当天的 App 使用时间块自动同步到系统日历（遵循 excludedCalendarCategories） */
     val autoSyncAppUsage: Boolean = false,
+    /** 「一事 · 时间记录」专属日历的颜色（ARGB） */
+    val timelineCalendarColor: Int = 0xFF48B59B.toInt(),
 )
 
 /**
@@ -47,6 +49,7 @@ class SettingsStore(private val context: Context) {
         val EXCLUDED_CALENDAR_CATEGORIES = stringSetPreferencesKey("excluded_calendar_categories")
         val AUTO_SYNC_CALENDAR = booleanPreferencesKey("auto_sync_calendar")
         val AUTO_SYNC_APP_USAGE = booleanPreferencesKey("auto_sync_app_usage")
+        val TIMELINE_CALENDAR_COLOR = intPreferencesKey("timeline_calendar_color")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { prefs ->
@@ -58,6 +61,7 @@ class SettingsStore(private val context: Context) {
             excludedCalendarCategories = prefs[Keys.EXCLUDED_CALENDAR_CATEGORIES] ?: emptySet(),
             autoSyncCalendar = prefs[Keys.AUTO_SYNC_CALENDAR] ?: false,
             autoSyncAppUsage = prefs[Keys.AUTO_SYNC_APP_USAGE] ?: false,
+            timelineCalendarColor = prefs[Keys.TIMELINE_CALENDAR_COLOR] ?: 0xFF48B59B.toInt(),
         )
     }
 
@@ -79,5 +83,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setAutoSyncAppUsage(enabled: Boolean) {
         context.settingsDataStore.edit { it[Keys.AUTO_SYNC_APP_USAGE] = enabled }
+    }
+
+    suspend fun setTimelineCalendarColor(color: Int) {
+        context.settingsDataStore.edit { it[Keys.TIMELINE_CALENDAR_COLOR] = color }
     }
 }

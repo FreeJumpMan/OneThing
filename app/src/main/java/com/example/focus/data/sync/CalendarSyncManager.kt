@@ -10,7 +10,9 @@ import com.example.focus.data.db.CalendarSync
 import com.example.focus.data.db.CalendarSyncDao
 import com.example.focus.data.db.TimelineEvent
 import com.example.focus.data.db.TimelineEventDao
+import com.example.focus.data.prefs.SettingsStore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.util.TimeZone
 
@@ -29,6 +31,9 @@ import java.util.TimeZone
  * 使用前提：调用方已获得 READ_CALENDAR + WRITE_CALENDAR 运行时权限
  * （查询日历列表需要 READ，写入事件需要 WRITE，国产 ROM 不保证同组同授）。
  */
+/** 「一事」专属日历的账户名（本地账户，App 时间块专用） */
+private const val TIMELINE_ACCOUNT = "yishi.timeline"
+
 class CalendarSyncManager(
     private val context: Context,
     private val syncDao: CalendarSyncDao,
@@ -55,6 +60,96 @@ class CalendarSyncManager(
         val name: String,
         val isPrimary: Boolean,
     )
+
+    // ===== 「一事」专属日历（App 时间块专用，颜色与专注记录区分） =====
+
+    private var timelineCalendarId: Long? = null
+
+    /**
+     * 查找或创建「一事 · 时间记录」专属日历（LOCAL 账户）。
+     * 找到就复用；没有就创建；创建失败（部分 ROM 不支持本地日历）返回 null，
+     * 调用方回退到默认可写日历。
+     */
+    private suspend fun findOrCreateTimelineCalendarId(): Long? =
+        withContext(Dispatchers.IO) {
+            timelineCalendarId?.let { return@withContext it }
+
+            // 期望颜色来自设置（用户可在 设置 → 同步 里挑）
+            val desiredColor = SettingsStore(context).settings.first().timelineCalendarColor
+
+            // 1. 先找已有的：颜色已是当前设定就复用；不一致就删掉重建
+            //    （部分 ROM 不允许修改已建日历的颜色，重建最稳）
+            runCatching {
+                resolver.query(
+                    CalendarContract.Calendars.CONTENT_URI,
+                    arrayOf(
+                        CalendarContract.Calendars._ID,
+                        CalendarContract.Calendars.CALENDAR_COLOR,
+                    ),
+                    "${CalendarContract.Calendars.ACCOUNT_NAME} = ?",
+                    arrayOf(TIMELINE_ACCOUNT),
+                    null,
+                )?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val id = cursor.getLong(0)
+                        val color = cursor.getInt(1)
+                        if (color == desiredColor) {
+                            timelineCalendarId = id
+                            return@withContext id
+                        }
+                        // 颜色与设置不一致 → 删掉重建（旧事件由同步流程重建）
+                        runCatching { deleteTimelineCalendar(id) }
+                    }
+                }
+            }
+
+            // 2. 创建本地日历（AOSP 的常规做法：LOCAL 账户 + CALLER_IS_SYNCADAPTER）
+            runCatching {
+                val uri = CalendarContract.Calendars.CONTENT_URI.buildUpon()
+                    .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
+                    .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, TIMELINE_ACCOUNT)
+                    .appendQueryParameter(
+                        CalendarContract.Calendars.ACCOUNT_TYPE,
+                        CalendarContract.ACCOUNT_TYPE_LOCAL,
+                    )
+                    .build()
+                val values = ContentValues().apply {
+                    put(CalendarContract.Calendars.ACCOUNT_NAME, TIMELINE_ACCOUNT)
+                    put(
+                        CalendarContract.Calendars.ACCOUNT_TYPE,
+                        CalendarContract.ACCOUNT_TYPE_LOCAL,
+                    )
+                    put(CalendarContract.Calendars.NAME, TIMELINE_ACCOUNT)
+                    put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, "一事 · 时间记录")
+                    put(CalendarContract.Calendars.CALENDAR_COLOR, desiredColor)
+                    put(
+                        CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
+                        CalendarContract.Calendars.CAL_ACCESS_OWNER,
+                    )
+                    put(CalendarContract.Calendars.OWNER_ACCOUNT, TIMELINE_ACCOUNT)
+                    put(CalendarContract.Calendars.VISIBLE, 1)
+                    put(CalendarContract.Calendars.SYNC_EVENTS, 1)
+                }
+                val inserted = resolver.insert(uri, values) ?: return@runCatching
+                timelineCalendarId = ContentUris.parseId(inserted)
+            }
+            timelineCalendarId
+        }
+
+    /** 删除专属日历（换色时重建用；其下事件会由后续同步重建） */
+    private fun deleteTimelineCalendar(id: Long) {
+        val uri = ContentUris.withAppendedId(
+            CalendarContract.Calendars.CONTENT_URI, id,
+        ).buildUpon()
+            .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
+            .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, TIMELINE_ACCOUNT)
+            .appendQueryParameter(
+                CalendarContract.Calendars.ACCOUNT_TYPE,
+                CalendarContract.ACCOUNT_TYPE_LOCAL,
+            )
+            .build()
+        resolver.delete(uri, null, null)
+    }
 
     /** 找一个可写的可见日历，返回其 id；没有返回 null */
     suspend fun findWritableCalendarId(): Long? =
@@ -200,6 +295,8 @@ class CalendarSyncManager(
     /**
      * 插入一个时间块事件（标题为分类名）。
      * 事件 id 记在本地映射表里（不用系统的 sync_data，国产 ROM 不暴露该列）。
+     *
+     * @param color 事件级颜色（分类色）；null = 跟随日历默认色
      */
     suspend fun insertTimelineBlock(
         date: String,
@@ -208,8 +305,12 @@ class CalendarSyncManager(
         description: String,
         startMs: Long,
         endMs: Long,
+        color: Int? = null,
     ): Long? = withContext(Dispatchers.IO) {
-        val calendarId = findWritableCalendarId() ?: return@withContext null
+        // App 时间块优先写入「一事」专属日历（颜色与专注记录区分）；创建失败则回退默认日历
+        val calendarId = findOrCreateTimelineCalendarId()
+            ?: findWritableCalendarId()
+            ?: return@withContext null
         runCatching {
             val values = ContentValues().apply {
                 put(CalendarContract.Events.CALENDAR_ID, calendarId)
@@ -218,6 +319,9 @@ class CalendarSyncManager(
                 put(CalendarContract.Events.DTSTART, startMs)
                 put(CalendarContract.Events.DTEND, endMs)
                 put(CalendarContract.Events.EVENT_TIMEZONE, TimeZone.getDefault().id)
+                if (color != null) {
+                    put(CalendarContract.Events.EVENT_COLOR, color)
+                }
             }
             val uri = resolver.insert(CalendarContract.Events.CONTENT_URI, values)
                 ?: return@runCatching null

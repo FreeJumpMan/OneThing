@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.focus.data.usage.DefaultCategoryRules
 import com.example.focus.ui.parseHexColor
 
 /**
@@ -217,6 +218,9 @@ fun CategoryDetailScreen(
     }
 
     if (showEditDialog && category != null) {
+        // 「其他」是兜底分类：未命中任何规则的 App 都记在它下面，
+        // 日历同步的排除项也按它的 id 记，删了就会变成「改不了也关不掉」的孤儿，所以不开放删除。
+        val isFallback = category.id == DefaultCategoryRules.CAT_OTHER
         CategoryEditDialog(
             initial = category,
             onDismiss = { showEditDialog = false },
@@ -224,9 +228,18 @@ fun CategoryDetailScreen(
                 viewModel.updateCategory(category, name, color)
                 showEditDialog = false
             },
-            onDelete = {
-                viewModel.deleteCategory(category)
-                onBack()
+            onDelete = if (isFallback) {
+                null
+            } else {
+                {
+                    viewModel.deleteCategory(category)
+                    onBack()
+                }
+            },
+            deleteBlockedReason = if (isFallback) {
+                "「其他」是兜底分类，没归类的 App 都记在这里，不能删除。给具体 App 指定分类即可把它们移出去。"
+            } else {
+                null
             },
             hasApps = (item?.appCount ?: 0) > 0,
         )

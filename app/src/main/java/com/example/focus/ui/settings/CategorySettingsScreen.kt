@@ -189,6 +189,8 @@ internal fun CategoryEditDialog(
     onDismiss: () -> Unit,
     onConfirm: (String, String) -> Unit,
     onDelete: (() -> Unit)? = null,
+    /** 不允许删除时给用户的说明（如兜底分类「其他」） */
+    deleteBlockedReason: String? = null,
     hasApps: Boolean = false,
 ) {
     var name by remember { mutableStateOf(initial?.name ?: "") }
@@ -238,6 +240,14 @@ internal fun CategoryEditDialog(
                             fontSize = 13.sp,
                         )
                     }
+                } else if (deleteBlockedReason != null) {
+                    Spacer(modifier = Modifier.height(18.dp))
+                    Text(
+                        text = deleteBlockedReason,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         },

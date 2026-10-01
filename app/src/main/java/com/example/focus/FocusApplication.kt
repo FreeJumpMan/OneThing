@@ -124,13 +124,26 @@ class FocusApplication : Application() {
         }
     }
 
-    /** 首次运行时写入内置时间分类（用户之后可自行增删改） */
+    /**
+     * 首次运行时写入内置时间分类；并保证兜底分类「其他」始终存在。
+     *
+     * 「其他」承担两件事：未命中任何规则的 App 都归到它；日历同步的排除项按它的 id 记。
+     * 一旦它被删掉，未归类的时间块会变成「名字还叫其他、但开关找不到、同步也关不掉」的孤儿，
+     * 所以每次启动都检查一次，缺了就补回来（只补它，不碰用户自己建的分类）。
+     */
     private fun seedDefaultCategories() {
         appScope.launch {
             runCatching {
                 val dao = AppDatabase.get(this@FocusApplication).timeCategoryDao()
                 if (dao.count() == 0) {
                     dao.upsertAll(DefaultCategoryRules.CATEGORIES)
+                    return@runCatching
+                }
+                if (dao.getById(DefaultCategoryRules.CAT_OTHER) == null) {
+                    dao.upsert(
+                        DefaultCategoryRules.CATEGORIES
+                            .first { it.id == DefaultCategoryRules.CAT_OTHER }
+                    )
                 }
             }
         }

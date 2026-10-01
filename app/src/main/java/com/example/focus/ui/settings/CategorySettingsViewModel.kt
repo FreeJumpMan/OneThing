@@ -103,8 +103,10 @@ class CategorySettingsViewModel(application: Application) : AndroidViewModel(app
     /**
      * 删除分类：同时清掉指向它的用户规则（那些 App 会回到内置默认归类），
      * 以及日历同步排除集合里的旧 id（否则设置页的「N 个已开启」会虚低）。
+     * 「其他」是兜底分类，不允许删除（UI 上也不给入口，这里再兜一层）。
      */
     fun deleteCategory(category: TimeCategory) {
+        if (category.id == DefaultCategoryRules.CAT_OTHER) return
         viewModelScope.launch {
             ruleDao.getAll()
                 .filter { it.categoryId == category.id }

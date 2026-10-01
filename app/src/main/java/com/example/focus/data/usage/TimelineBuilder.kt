@@ -41,6 +41,15 @@ object TimelineBuilder {
     }
 
     /**
+     * 把分类 id 纠正到实际存在的分类上。
+     *
+     * 规则里可能指向一个已被用户删除的分类；不纠正的话，时间块会「名字显示成其他、
+     * 但排除集合里找不到它的 id」——日历同步的开关就失效了。统一退回兜底的「其他」。
+     */
+    fun normalizeCategory(categoryId: Long, categories: Map<Long, TimeCategory>): Long =
+        if (categories.containsKey(categoryId)) categoryId else DefaultCategoryRules.CAT_OTHER
+
+    /**
      * 把事件级 App 区间合并成时间块。
      *
      * 三级处理，兼顾紧凑与诚实：
@@ -63,7 +72,10 @@ object TimelineBuilder {
             .filter { it.durationMs >= minSegmentMs }
             .map { interval ->
                 val resolved = resolveCategory(interval.packageName, interval.appName, rules)
-                val categoryId = resolved?.first ?: DefaultCategoryRules.CAT_OTHER
+                val categoryId = normalizeCategory(
+                    resolved?.first ?: DefaultCategoryRules.CAT_OTHER,
+                    categories,
+                )
                 val level = resolved?.second ?: ProductivityLevel.NEUTRAL
                 Triple(interval, categoryId, level)
             }

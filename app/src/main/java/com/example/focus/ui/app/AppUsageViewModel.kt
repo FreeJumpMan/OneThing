@@ -145,7 +145,11 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
 
             val meta = apps.associate { item ->
                 val resolved = TimelineBuilder.resolveCategory(item.packageName, item.appName, rules)
-                val categoryId = resolved?.first ?: DefaultCategoryRules.CAT_OTHER
+                // 规则可能指向已被删除的分类，纠正到兜底的「其他」，否则会和同步开关对不上
+                val categoryId = TimelineBuilder.normalizeCategory(
+                    resolved?.first ?: DefaultCategoryRules.CAT_OTHER,
+                    categories,
+                )
                 val level = resolved?.second ?: ProductivityLevel.NEUTRAL
                 val category = categories[categoryId]
                     ?: DefaultCategoryRules.CATEGORIES.first { it.id == DefaultCategoryRules.CAT_OTHER }
@@ -158,8 +162,11 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
 
             val usage = apps
                 .groupBy { item ->
-                    TimelineBuilder.resolveCategory(item.packageName, item.appName, rules)?.first
-                        ?: DefaultCategoryRules.CAT_OTHER
+                    TimelineBuilder.normalizeCategory(
+                        TimelineBuilder.resolveCategory(item.packageName, item.appName, rules)
+                            ?.first ?: DefaultCategoryRules.CAT_OTHER,
+                        categories,
+                    )
                 }
                 .map { (categoryId, list) ->
                     val category = categories[categoryId]

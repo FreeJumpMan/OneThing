@@ -718,15 +718,16 @@ private fun TimelineRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            // 行间距放在 Row 外侧，这样三个子块都以同一根中线居中（圆点正好夹在两个时间中间）
+            .padding(bottom = 18.dp)
             .height(IntrinsicSize.Min),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         // 左侧时间：开始在上、结束在下，两者同样式
         // （时间轴的惯常读法：进站出站平权；lineHeight 必须显式给，
         //  否则会继承主题默认行高把行距撞开）
         Column(
-            modifier = Modifier
-                .width(44.dp)
-                .padding(top = 2.dp),
+            modifier = Modifier.width(44.dp),
             horizontalAlignment = Alignment.End,
         ) {
             Text(
@@ -796,11 +797,7 @@ private fun TimelineRow(
 
         // 事项内容：操作收进右侧的 ⋯ 菜单
         var menuOpen by remember { mutableStateOf(false) }
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .padding(bottom = 18.dp),
-        ) {
+        Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = name,

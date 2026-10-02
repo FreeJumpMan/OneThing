@@ -12,6 +12,7 @@ import com.example.focus.data.sync.CalendarSyncManager
 import com.example.focus.data.usage.IntervalMerger
 import com.example.focus.data.usage.TimeInterval
 import com.example.focus.data.usage.UsageStatsRepository
+import com.example.focus.ui.formatDurationCompact
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,6 +74,12 @@ data class AutoRecordDiagnosis(
     val remainingCount: Int,
     val remainingTotalMs: Long,
     val hiddenCount: Int,
+    /** 每个专注 App 的系统统计时长（同一 App 的两个口径对比：统计 vs 事件） */
+    val appStats: List<String> = emptyList(),
+    /** 片段明细（前几条） */
+    val segmentLines: List<String> = emptyList(),
+    /** 原始事件的类型分布 */
+    val eventSummary: String = "",
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -170,6 +177,26 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 }.getOrDefault(pkg)
             }.sorted()
 
+            val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
+            fun hhmmss(ms: Long): String =
+                Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().format(timeFmt)
+
+            // 同一 App 的两个口径对比：系统统计的总时长 vs 事件切出来的片段
+            val appStats = packages.map { pkg ->
+                val label = runCatching {
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                }.getOrDefault(pkg)
+                "$label · 系统统计 = ${formatDurationCompact(usageRepo.loadAppRange(pkg, date, date))}"
+            }
+
+            val segmentLines = segments.take(10).map { s ->
+                "${hhmmss(s.startMs)}–${hhmmss(s.endMs)} · " +
+                    "${formatDurationCompact(s.endMs - s.startMs)} · " +
+                    s.appNames.joinToString("/")
+            }
+
+            val eventSummary = usageRepo.debugEventSummary(packages, dayStart, dayEnd)
+
             _autoDiag.value = AutoRecordDiagnosis(
                 date = date.toString(),
                 hasUsageAccess = usageRepo.hasUsageAccess(),
@@ -180,6 +207,9 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 remainingCount = records.size,
                 remainingTotalMs = records.sumOf { it.durationMs },
                 hiddenCount = hidden.size,
+                appStats = appStats,
+                segmentLines = segmentLines,
+                eventSummary = eventSummary,
             )
         }
     }

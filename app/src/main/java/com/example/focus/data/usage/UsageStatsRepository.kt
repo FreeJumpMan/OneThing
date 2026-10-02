@@ -445,6 +445,42 @@ class UsageStatsRepository(private val context: Context) {
             }
         }
 
+    /**
+     * 诊断用：统计指定包在区间内的事件类型分布。
+     * 用来确认 ROM 实际发的是哪几种事件（ACTIVITY_RESUMED=23 / PAUSED=24 / STOPPED=23+? ），
+     * 以及时间戳有没有断。
+     */
+    suspend fun debugEventSummary(
+        packages: Set<String>,
+        startMs: Long,
+        endMs: Long,
+    ): String = withContext(Dispatchers.IO) {
+        val manager = context.getSystemService(UsageStatsManager::class.java)
+            ?: return@withContext "（没有 UsageStatsManager）"
+        val events = manager.queryEvents(startMs, endMs)
+            ?: return@withContext "（queryEvents 返回 null）"
+        val event = UsageEvents.Event()
+        val counts = mutableMapOf<Int, Int>()
+        var first = Long.MAX_VALUE
+        var last = Long.MIN_VALUE
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            val pkg = event.packageName ?: continue
+            if (pkg !in packages) continue
+            counts[event.eventType] = (counts[event.eventType] ?: 0) + 1
+            first = minOf(first, event.timeStamp)
+            last = maxOf(last, event.timeStamp)
+        }
+        if (counts.isEmpty()) return@withContext "（该 App 这段时间没有任何事件）"
+        val zone = ZoneId.systemDefault()
+        val fmt = java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss")
+        fun t(ms: Long): String =
+            java.time.Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().format(fmt)
+        "类型统计 = " + counts.entries.sortedBy { it.key }
+            .joinToString("、") { "类型${it.key}×${it.value}" } +
+            "；最早 ${t(first)}，最晚 ${t(last)}"
+    }
+
     private fun appLabel(pm: PackageManager, pkg: String): String? = runCatching {
         pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
     }.getOrNull()

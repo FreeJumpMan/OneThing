@@ -1115,22 +1115,34 @@ private fun DebugDialog(
                 autoDiag?.let { d ->
                     Column(
                         modifier = Modifier
-                            .heightIn(max = 170.dp)
+                            .heightIn(max = 220.dp)
                             .verticalScroll(rememberScrollState()),
                     ) {
-                        listOf(
-                            "日期 = ${d.date}",
-                            "使用情况访问 = ${d.hasUsageAccess}",
-                            "专注 App（${d.focusApps.size}）= ${d.focusApps.joinToString("、").ifEmpty { "（空）" }}",
-                            "系统片段 = ${d.segmentCount} 段 · 合计 ${formatDurationCompact(d.segmentTotalMs)}",
-                            "当天计时记录 = ${d.sessionCount} 条",
-                            "派生的自动记录 = ${d.remainingCount} 条 · 合计 " +
-                                formatDurationCompact(d.remainingTotalMs),
-                            "已隐藏区间 = ${d.hiddenCount} 条",
-                        ).forEach { line ->
+                        buildList {
+                            add("日期 = ${d.date}")
+                            add("使用情况访问 = ${d.hasUsageAccess}")
+                            add(
+                                "专注 App（${d.focusApps.size}）= " +
+                                    d.focusApps.joinToString("、").ifEmpty { "（空）" }
+                            )
+                            d.appStats.forEach { add("  · $it") }
+                            add(
+                                "系统片段 = ${d.segmentCount} 段 · 合计 " +
+                                    formatDurationCompact(d.segmentTotalMs)
+                            )
+                            d.segmentLines.forEach { add("  · $it") }
+                            add("事件：${d.eventSummary}")
+                            add("当天计时记录 = ${d.sessionCount} 条")
+                            add(
+                                "派生的自动记录 = ${d.remainingCount} 条 · 合计 " +
+                                    formatDurationCompact(d.remainingTotalMs)
+                            )
+                            add("已隐藏区间 = ${d.hiddenCount} 条")
+                        }.forEach { line ->
                             Text(
                                 text = line,
                                 fontSize = 11.sp,
+                                lineHeight = 15.sp,
                                 color = MaterialTheme.colorScheme.onSurface,
                                 fontFamily = FontFamily.Monospace,
                             )
@@ -1244,10 +1256,13 @@ private fun buildDebugReport(
             "专注 App（${autoDiag.focusApps.size}）= " +
                 autoDiag.focusApps.joinToString("、").ifEmpty { "（空）" }
         )
+        autoDiag.appStats.forEach { sb.appendLine("  · $it") }
         sb.appendLine(
             "系统片段 = ${autoDiag.segmentCount} 段 · 合计 " +
                 formatDurationCompact(autoDiag.segmentTotalMs)
         )
+        autoDiag.segmentLines.forEach { sb.appendLine("  · $it") }
+        sb.appendLine("事件：${autoDiag.eventSummary}")
         sb.appendLine("当天计时记录 = ${autoDiag.sessionCount} 条")
         sb.appendLine(
             "派生的自动记录 = ${autoDiag.remainingCount} 条 · 合计 " +

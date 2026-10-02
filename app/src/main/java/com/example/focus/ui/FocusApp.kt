@@ -2,8 +2,10 @@ package com.example.focus.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.DateRange
@@ -15,6 +17,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.ScaffoldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,14 +40,21 @@ import com.example.focus.ui.stats.StatsScreen
 import com.example.focus.ui.theme.screenGradient
 import com.example.focus.ui.todo.TodoScreen
 
+/** 一级页（带底部导航）的路由；其余（设置、专注 App、时间分类、分类详情）都是全屏页 */
+private val TAB_ROUTES = setOf("todo", "app", "history", "stats")
+
 /**
  * 应用导航骨架：顶部柔光渐变背景 + 极简底部导航（小图标小文字、无胶囊指示器）。
+ * 底部导航只在四个一级页出现；设置及其子页是全屏详情页。
  */
 @Composable
 fun FocusApp() {
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
+
+    // 首帧 currentRoute 还是 null，此时按「显示」处理，免得启动时底栏闪一下
+    val showBottomBar = currentRoute == null || currentRoute in TAB_ROUTES
 
     Box(
         modifier = Modifier
@@ -59,7 +69,14 @@ fun FocusApp() {
     ) {
         Scaffold(
             containerColor = Color.Transparent,
-            bottomBar = {
+            // 全屏详情页没有底栏，把底部系统栏的留白改由内容自己吃掉（edge-to-edge 下必须）
+            contentWindowInsets = if (showBottomBar) {
+                ScaffoldDefaults.contentWindowInsets
+            } else {
+                WindowInsets.systemBars
+            },
+            bottomBar = bar@{
+                if (!showBottomBar) return@bar
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surface,
                     tonalElevation = 0.dp,

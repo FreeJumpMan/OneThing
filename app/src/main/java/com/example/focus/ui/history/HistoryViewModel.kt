@@ -83,6 +83,8 @@ data class AutoRecordDiagnosis(
     val segmentLines: List<String> = emptyList(),
     /** 原始事件的类型分布 */
     val eventSummary: String = "",
+    /** 系统统计的来源拆解（日桶边界 + 区间聚合） */
+    val statsDetail: List<String> = emptyList(),
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -160,29 +162,35 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
      * 免得出现「使用排行里有 9m、历史里什么都看不到」。
      */
     val focusAppDayTotals: StateFlow<List<FocusAppDayTotal>> =
-        combine(selectedDate, focusPackages, autoRecords) { date, packages, records ->
-            loadFocusAppDayTotals(date, packages, records)
+        combine(selectedDate, focusPackages, autoRefreshTick) { date, packages, _ ->
+            loadFocusAppDayTotals(date, packages)
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private suspend fun loadFocusAppDayTotals(
         date: LocalDate,
         packages: Set<String>,
-        records: List<AutoRecord>,
     ): List<FocusAppDayTotal> {
         if (packages.isEmpty() || !usageRepo.hasUsageAccess()) return emptyList()
         val pm = getApplication<Application>().packageManager
-        val minTotalMs = settingsStore.settings.first().focusAppMinSeconds * 1000L
-        val minGapMs = 2 * 60_000L    // 与事件时段差额小于该值就当作「事件已交代清楚」
+        val settings = settingsStore.settings.first()
+        val minMs = settings.focusAppMinSeconds * 1000L
+        val toleranceMs = settings.switchToleranceMinutes * 60_000L
+        val zone = ZoneId.systemDefault()
+        val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
         return packages.mapNotNull { pkg ->
             val stats = usageRepo.loadAppRange(pkg, date, date)
-            if (stats < minTotalMs) return@mapNotNull null
+            if (stats < minMs) return@mapNotNull null
+            // 跟「事件流能定位到的时段」比（未扣计时记录的那份）：
+            // 被计时记录覆盖的时间不该被误判成「事件缺失」，否则会重复报一份
+            val eventMs = usageRepo
+                .loadFocusUsageSegments(setOf(pkg), dayStart, dayEnd, toleranceMs)
+                .sumOf { it.endMs - it.startMs }
+            if (stats - eventMs < minMs) return@mapNotNull null
             val label = runCatching {
                 pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
             }.getOrDefault(pkg)
-            val shownByEvents = records
-                .filter { record -> label in record.appNames }
-                .sumOf { it.durationMs }
-            if (stats - shownByEvents < minGapMs) return@mapNotNull null
             FocusAppDayTotal(appName = label, totalMs = stats)
         }.sortedByDescending { it.totalMs }
     }
@@ -209,22 +217,25 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
             val records = loadAutoRecords(date, packages, sessions, hidden)
 
             val pm = getApplication<Application>().packageManager
-            val labels = packages.map { pkg ->
-                runCatching {
+            val labeled = packages.map { pkg ->
+                val label = runCatching {
                     pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
                 }.getOrDefault(pkg)
-            }.sorted()
+                pkg to label
+            }.sortedBy { it.second }
+            val labels = labeled.map { it.second }
 
             val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
             fun hhmmss(ms: Long): String =
                 Instant.ofEpochMilli(ms).atZone(zone).toLocalTime().format(timeFmt)
 
             // 同一 App 的两个口径对比：系统统计的总时长 vs 事件切出来的片段
-            val appStats = packages.map { pkg ->
-                val label = runCatching {
-                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-                }.getOrDefault(pkg)
+            val appStats = labeled.map { (pkg, label) ->
                 "$label · 系统统计 = ${formatDurationCompact(usageRepo.loadAppRange(pkg, date, date))}"
+            }
+            // 统计是从哪儿来的：日桶边界是否跑出了当天
+            val statsDetail = labeled.map { (pkg, label) ->
+                "$label：${usageRepo.debugStatsDetail(pkg, date)}"
             }
 
             val segmentLines = segments.take(10).map { s ->
@@ -248,6 +259,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 appStats = appStats,
                 segmentLines = segmentLines,
                 eventSummary = eventSummary,
+                statsDetail = statsDetail,
             )
         }
     }

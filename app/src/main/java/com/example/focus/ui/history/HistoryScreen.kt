@@ -1166,6 +1166,7 @@ private fun DebugDialog(
                                     d.focusApps.joinToString("、").ifEmpty { "（空）" }
                             )
                             d.appStats.forEach { add("  · $it") }
+                            d.statsDetail.forEach { add("  · $it") }
                             add(
                                 "系统片段 = ${d.segmentCount} 段 · 合计 " +
                                     formatDurationCompact(d.segmentTotalMs)
@@ -1297,6 +1298,7 @@ private fun buildDebugReport(
                 autoDiag.focusApps.joinToString("、").ifEmpty { "（空）" }
         )
         autoDiag.appStats.forEach { sb.appendLine("  · $it") }
+        autoDiag.statsDetail.forEach { sb.appendLine("  · $it") }
         sb.appendLine(
             "系统片段 = ${autoDiag.segmentCount} 段 · 合计 " +
                 formatDurationCompact(autoDiag.segmentTotalMs)

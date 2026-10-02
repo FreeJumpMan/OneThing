@@ -479,6 +479,46 @@ class UsageStatsRepository(private val context: Context) {
         }
 
     /**
+     * 诊断用：拆开某 App 当天的系统统计来源。
+     * - `queryUsageStats(INTERVAL_DAILY)` 返回的每个桶（各自的起止 + 前台时长）
+     * - `queryAndAggregateUsageStats` 在「当天 0 点 → 现在」上的合计
+     * 用来确认「日桶」有没有跨边界（把前一天的时间算进来）。
+     */
+    suspend fun debugStatsDetail(pkg: String, date: LocalDate): String = withContext(Dispatchers.IO) {
+        val zone = ZoneId.systemDefault()
+        val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
+        val dayEnd = minOf(
+            date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+            System.currentTimeMillis(),
+        )
+        val manager = context.getSystemService(UsageStatsManager::class.java)
+            ?: return@withContext "（没有 UsageStatsManager）"
+        if (dayEnd <= dayStart) return@withContext "（区间为空）"
+        val fmt = java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
+        fun f(ms: Long): String = java.time.Instant.ofEpochMilli(ms).atZone(zone).format(fmt)
+
+        val sb = StringBuilder()
+        val buckets = runCatching {
+            manager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, dayStart, dayEnd)
+        }.getOrNull().orEmpty().filter { it.packageName == pkg }
+        if (buckets.isEmpty()) {
+            sb.append("桶 = 无")
+        } else {
+            buckets.forEach { b ->
+                sb.append(
+                    "桶 ${f(b.firstTimeStamp)} → ${f(b.lastTimeStamp)} = " +
+                        "${b.totalTimeInForeground / 60_000}m；"
+                )
+            }
+        }
+        val agg = runCatching {
+            manager.queryAndAggregateUsageStats(dayStart, dayEnd)[pkg]
+        }.getOrNull()
+        sb.append(" 聚合 = ${(agg?.totalTimeInForeground ?: 0L) / 60_000}m")
+        sb.toString()
+    }
+
+    /**
      * 诊断用：统计指定包在区间内的事件类型分布。
      * 用来确认 ROM 实际发的是哪几种事件（ACTIVITY_RESUMED=23 / PAUSED=24 / STOPPED=23+? ），
      * 以及时间戳有没有断。

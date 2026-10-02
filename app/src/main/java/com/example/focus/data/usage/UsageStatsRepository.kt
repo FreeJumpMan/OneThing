@@ -223,6 +223,13 @@ class UsageStatsRepository(private val context: Context) {
         val event = UsageEvents.Event()
         val nameCache = mutableMapOf<String, String>()
 
+        // 收尾信号（与 loadDayIntervals 同口径）
+        val screenOffTypes = setOf(
+            UsageEvents.Event.SCREEN_NON_INTERACTIVE,
+            UsageEvents.Event.KEYGUARD_SHOWN,
+            UsageEvents.Event.DEVICE_SHUTDOWN,
+        )
+
         fun nameOf(pkg: String): String = nameCache.getOrPut(pkg) {
             appLabel(pm, pkg) ?: pkg
         }
@@ -233,8 +240,17 @@ class UsageStatsRepository(private val context: Context) {
             raw += RawFocusSlice(start, endTimeMs, nameOf(pkg))
         }
 
+        fun closeAllSlices(endTimeMs: Long) {
+            openAt.keys.toList().forEach { closeSlice(it, endTimeMs) }
+        }
+
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
+            // 屏幕熄灭 / 锁屏 / 关机：先于包名过滤处理，这类事件不一定会带着前台 App 的包名
+            if (event.eventType in screenOffTypes) {
+                closeAllSlices(event.timeStamp)
+                continue
+            }
             val pkg = event.packageName ?: continue
             if (pkg !in packages) continue
             when (event.eventType) {
@@ -370,6 +386,13 @@ class UsageStatsRepository(private val context: Context) {
         val pm = context.packageManager
         val skipPackages = excludedPackages(pm)
 
+        // 收尾信号：屏幕熄灭 / 锁屏 / 用户停止 / 关机。收到就把所有开着的前台区间截断。
+        val screenOffTypes = setOf(
+            UsageEvents.Event.SCREEN_NON_INTERACTIVE,
+            UsageEvents.Event.KEYGUARD_SHOWN,
+            UsageEvents.Event.DEVICE_SHUTDOWN,
+        )
+
         val resumedType = if (Build.VERSION.SDK_INT >= 29) {
             UsageEvents.Event.ACTIVITY_RESUMED
         } else {
@@ -395,8 +418,18 @@ class UsageStatsRepository(private val context: Context) {
             raw += AppUsageInterval(pkg, label, begin, endMs)
         }
 
+        fun closeAll(endMs: Long) {
+            openAt.keys.toList().forEach { closeInterval(it, endMs) }
+        }
+
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
+            // 屏幕熄灭 / 锁屏 / 关机：ROM 不一定会给当前前台 App 发 PAUSED，
+            // 不收尾的话最后一个 App 会被算成一直用到下次拾起手机（夜里能长出几小时的假块）
+            if (event.eventType in screenOffTypes) {
+                closeAll(event.timeStamp)
+                continue
+            }
             val pkg = event.packageName ?: continue
             when (event.eventType) {
                 resumedType -> {

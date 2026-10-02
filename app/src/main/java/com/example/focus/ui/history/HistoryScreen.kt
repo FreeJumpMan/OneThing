@@ -116,6 +116,7 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     val markedDates by viewModel.markCounts.collectAsState()
     val daySessions by viewModel.selectedDaySessions.collectAsState()
     val autoRecords by viewModel.autoRecords.collectAsState()
+    val focusAppTotals by viewModel.focusAppDayTotals.collectAsState()
     val syncedIds by viewModel.syncedIds.collectAsState()
     val syncUndo by viewModel.syncUndo.collectAsState()
     val hiddenUndo by viewModel.hiddenUndo.collectAsState()
@@ -397,6 +398,46 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                         )
                     }
                 }
+            }
+        }
+
+        // 专注 App 的按天合计（系统统计口径）：事件流没能给出可定位时段时的兜底
+        if (focusAppTotals.isNotEmpty()) {
+            Column(modifier = Modifier.padding(top = 16.dp)) {
+                Text(
+                    text = "专注 App · 系统统计",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                focusAppTotals.forEach { item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = item.appName,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = formatDurationCompact(item.totalMs),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "当天的事件记录不完整，这一项来自系统统计，没有精确时段",
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                )
             }
         }
     }

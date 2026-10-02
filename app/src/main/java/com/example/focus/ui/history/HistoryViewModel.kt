@@ -48,6 +48,9 @@ data class AutoRecord(
     val displayName: String get() = appNames.joinToString("、")
 }
 
+/** 专注 App 的按天合计（系统统计口径），用于在历史页兜底 */
+data class FocusAppDayTotal(val appName: String, val totalMs: Long)
+
 /** 「一键同步」的撤回凭据：本次写入的条数与会话 id */
 data class SyncUndoState(
     val count: Int,
@@ -147,6 +150,41 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     /** 界面回到前台时调用：自动记录不落库，需要主动刷新系统数据 */
     fun refreshAutoRecords() {
         autoRefreshTick.value = System.currentTimeMillis()
+    }
+
+    /**
+     * 专注 App 的按天合计（系统统计口径）。
+     *
+     * 事件流只能给出「能定位的时段」，某些 ROM 的事件并不完整，
+     * 而 `queryUsageStats` 的日聚合是可靠的。当两者的差额明显时补一条合计，
+     * 免得出现「使用排行里有 9m、历史里什么都看不到」。
+     */
+    val focusAppDayTotals: StateFlow<List<FocusAppDayTotal>> =
+        combine(selectedDate, focusPackages, autoRecords) { date, packages, records ->
+            loadFocusAppDayTotals(date, packages, records)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private suspend fun loadFocusAppDayTotals(
+        date: LocalDate,
+        packages: Set<String>,
+        records: List<AutoRecord>,
+    ): List<FocusAppDayTotal> {
+        if (packages.isEmpty() || !usageRepo.hasUsageAccess()) return emptyList()
+        val pm = getApplication<Application>().packageManager
+        val minTotalMs = 60_000L      // 合计不足 1 分钟不值得单列
+        val minGapMs = 2 * 60_000L    // 与事件时段差额小于该值就当作「事件已交代清楚」
+        return packages.mapNotNull { pkg ->
+            val stats = usageRepo.loadAppRange(pkg, date, date)
+            if (stats < minTotalMs) return@mapNotNull null
+            val label = runCatching {
+                pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+            }.getOrDefault(pkg)
+            val shownByEvents = records
+                .filter { record -> label in record.appNames }
+                .sumOf { it.durationMs }
+            if (stats - shownByEvents < minGapMs) return@mapNotNull null
+            FocusAppDayTotal(appName = label, totalMs = stats)
+        }.sortedByDescending { it.totalMs }
     }
 
     private val _autoDiag = MutableStateFlow<AutoRecordDiagnosis?>(null)

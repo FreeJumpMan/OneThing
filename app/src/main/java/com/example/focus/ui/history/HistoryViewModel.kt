@@ -43,6 +43,11 @@ data class AutoRecord(
     val appNames: List<String>,
     val startMs: Long,
     val endMs: Long,
+    /**
+     * true = 推算：事件流给不出真正的前台时段（某些 ROM 只发几秒），
+     * 位置是按「该 App 当天最后一条事件往前推统计总时长」得出来的。
+     */
+    val estimated: Boolean = false,
 ) {
     val durationMs: Long get() = (endMs - startMs).coerceAtLeast(0L)
     val displayName: String get() = appNames.joinToString("、")
@@ -182,12 +187,11 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         return packages.mapNotNull { pkg ->
             val stats = usageRepo.loadAppRange(pkg, date, date)
             if (stats < minMs) return@mapNotNull null
-            // 跟「事件流能定位到的时段」比（未扣计时记录的那份）：
-            // 被计时记录覆盖的时间不该被误判成「事件缺失」，否则会重复报一份
-            val eventMs = usageRepo
+            // 有事件的话会走「推算」那条（历史页时间线上看得见），这里就不再重复列汇总
+            val hasEvents = usageRepo
                 .loadFocusUsageSegments(setOf(pkg), dayStart, dayEnd, toleranceMs)
-                .sumOf { it.endMs - it.startMs }
-            if (stats - eventMs < minMs) return@mapNotNull null
+                .isNotEmpty()
+            if (hasEvents) return@mapNotNull null
             val label = runCatching {
                 pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
             }.getOrDefault(pkg)
@@ -565,7 +569,6 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
 
         val segments = usageRepo.loadFocusUsageSegments(packages, dayStart, dayEnd, toleranceMs)
         if (segments.isEmpty()) return emptyList()
-
         // 与当天计时记录重叠的部分剪掉：同一段时间不重复展示
         val sessionIntervals = sessions
             .filter { it.startTimeMs < dayEnd && it.endTimeMs > dayStart }
@@ -576,7 +579,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
 
-        return segments.flatMap { segment ->
+        val derived = segments.flatMap { segment ->
             IntervalMerger.subtract(
                 listOf(TimeInterval(segment.startMs, segment.endMs)),
                 sessionIntervals,
@@ -592,6 +595,35 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
         }
+
+        // 事件流给不全时（实测：某 ROM 里 2 分钟的使用只发 6 秒事件），
+        // 用系统统计的总时长补一条「推算」：位置＝该 App 当天最后一条事件往前推。
+        // 与计时记录重叠的部分同样剪掉，避免和历史里的记录重复。
+        val estimated = packages.mapNotNull { pkg ->
+            val stats = usageRepo.loadAppRange(pkg, date, date)
+            if (stats < minDisplayMs) return@mapNotNull null
+            val segs = usageRepo.loadFocusUsageSegments(setOf(pkg), dayStart, dayEnd, toleranceMs)
+            if (segs.isEmpty()) return@mapNotNull null
+            val eventMs = segs.sumOf { it.endMs - it.startMs }
+            // 事件已经交代清楚了就不推算
+            if (stats - eventMs < minDisplayMs) return@mapNotNull null
+            val lastEnd = segs.maxOf { it.endMs }
+            val from = (lastEnd - stats).coerceAtLeast(dayStart)
+            val main = IntervalMerger.subtract(
+                listOf(TimeInterval(from, lastEnd)),
+                sessionIntervals,
+            ).maxByOrNull { it.endMs - it.startMs } ?: return@mapNotNull null
+            if (main.durationMs < minDisplayMs) return@mapNotNull null
+            if (hidden.any { overlapsMostly(main, it) }) return@mapNotNull null
+            AutoRecord(
+                appNames = segs.flatMap { it.appNames }.distinct(),
+                startMs = main.startMs,
+                endMs = main.endMs,
+                estimated = true,
+            )
+        }
+
+        return (derived + estimated).sortedBy { it.startMs }
     }
 
     fun clearError() {

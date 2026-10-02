@@ -391,6 +391,7 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
                             endMs = entry.endMs,
                             name = entry.name,
                             auto = true,
+                            autoTag = entry.tag,
                             isFirst = index == 0,
                             isLast = index == timelineEntries.lastIndex,
                             onEdit = { editingAuto = entry.record },
@@ -684,6 +685,8 @@ private sealed interface TimelineEntry {
         override val startMs: Long get() = record.startMs
         override val endMs: Long get() = record.endMs
         override val name: String get() = record.displayName
+        /** 推算出来的时间段用不同的标记，不冒充事件记录 */
+        val tag: String get() = if (record.estimated) "推算" else "自动"
     }
 }
 
@@ -710,6 +713,8 @@ private fun TimelineRow(
     isFirst: Boolean,
     isLast: Boolean,
     auto: Boolean = false,
+    /** 自动记录右侧的标记文字：自动 / 推算 */
+    autoTag: String = "自动",
     synced: Boolean = false,
     onSync: (() -> Unit)? = null,
     onEdit: (() -> Unit)? = null,
@@ -812,7 +817,7 @@ private fun TimelineRow(
                 )
                 if (auto) {
                     Text(
-                        text = "自动",
+                        text = autoTag,
                         fontSize = 10.sp,
                         color = MaterialTheme.colorScheme.outline,
                     )

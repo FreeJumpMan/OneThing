@@ -43,6 +43,8 @@ class DayCalendarPlanner(private val context: Context) {
         includeAppUsage: Boolean,
         excludedCategories: Set<String>,
         switchToleranceMs: Long,
+        /** 专注 App 时段的最小写入长度（秒，来自设置） */
+        focusAppMinMs: Long,
     ): List<PlannedCalendarEvent> = withContext(Dispatchers.IO) {
         if (!includeFocusApp && !includeAppUsage) return@withContext emptyList()
 
@@ -71,7 +73,7 @@ class DayCalendarPlanner(private val context: Context) {
                         listOf(TimeInterval(segment.startMs, segment.endMs)),
                         occupied,
                     ).forEach { remains ->
-                        if (remains.durationMs >= MIN_EVENT_MS) {
+                        if (remains.durationMs >= focusAppMinMs) {
                             events += PlannedCalendarEvent(
                                 title = "${segment.appNames.joinToString("、")} · " +
                                     formatCompactDuration(remains.durationMs),
@@ -214,6 +216,7 @@ suspend fun syncDayToCalendar(
     includeAppUsage: Boolean,
     excludedCategories: Set<String>,
     switchToleranceMinutes: Int,
+    focusAppMinSeconds: Int,
 ): Int {
     val syncManager = CalendarSyncManager(
         context,
@@ -228,6 +231,7 @@ suspend fun syncDayToCalendar(
         includeAppUsage = includeAppUsage,
         excludedCategories = excludedCategories,
         switchToleranceMs = switchToleranceMinutes * 60_000L,
+        focusAppMinMs = focusAppMinSeconds * 1000L,
     )
     if (events.isEmpty()) return 0
 

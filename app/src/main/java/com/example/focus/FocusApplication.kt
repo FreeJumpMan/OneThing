@@ -119,6 +119,7 @@ class FocusApplication : Application() {
                     includeAppUsage = settings.autoSyncAppUsage,
                     excludedCategories = settings.excludedCalendarCategories,
                     switchToleranceMinutes = settings.switchToleranceMinutes,
+                    focusAppMinSeconds = settings.focusAppMinSeconds,
                 )
             }
         }

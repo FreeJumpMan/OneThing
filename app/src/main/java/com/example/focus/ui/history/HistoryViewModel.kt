@@ -171,7 +171,7 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     ): List<FocusAppDayTotal> {
         if (packages.isEmpty() || !usageRepo.hasUsageAccess()) return emptyList()
         val pm = getApplication<Application>().packageManager
-        val minTotalMs = settingsStore.settings.first().focusAppMinMinutes * 60_000L
+        val minTotalMs = settingsStore.settings.first().focusAppMinSeconds * 1000L
         val minGapMs = 2 * 60_000L    // 与事件时段差额小于该值就当作「事件已交代清楚」
         return packages.mapNotNull { pkg ->
             val stats = usageRepo.loadAppRange(pkg, date, date)
@@ -548,8 +548,8 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
         val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val settings = settingsStore.settings.first()
         val toleranceMs = settings.switchToleranceMinutes * 60_000L
-        // 最短计入时长由用户在设置里定（默认 1 分钟）
-        val minDisplayMs = settings.focusAppMinMinutes * 60_000L
+        // 最短计入时长（秒）由用户在设置里定（默认 60 秒）
+        val minDisplayMs = settings.focusAppMinSeconds * 1000L
 
         val segments = usageRepo.loadFocusUsageSegments(packages, dayStart, dayEnd, toleranceMs)
         if (segments.isEmpty()) return emptyList()

@@ -236,8 +236,8 @@ fun SettingsScreen(
                 )
                 SettingRow(
                     title = "最短计入时长",
-                    subtitle = "不足该时长的专注 App 使用不计入历史",
-                    value = "${settings.focusAppMinMinutes} 分钟",
+                    subtitle = "不足该时长的专注 App 使用不计入历史，也不写进日历",
+                    value = formatMinSeconds(settings.focusAppMinSeconds),
                     onClick = { showFocusMinDialog = true },
                 )
                 SettingRow(
@@ -550,18 +550,18 @@ fun SettingsScreen(
             text = {
                 Column {
                     Text(
-                        text = "专注 App 的单段使用不足这个时长时，不计入专注历史（日历同步仍按各自开关）",
+                        text = "专注 App 的单段使用不足这个时长时，不计入专注历史，也不会写进日历。",
                         fontSize = 12.sp,
                         lineHeight = 17.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 8.dp),
                     )
-                    listOf(1, 2, 5, 10).forEach { minutes ->
+                    FOCUS_MIN_SECONDS_OPTIONS.forEach { seconds ->
                         DialogOption(
-                            text = "$minutes 分钟",
-                            selected = settings.focusAppMinMinutes == minutes,
+                            text = formatMinSeconds(seconds),
+                            selected = settings.focusAppMinSeconds == seconds,
                             onClick = {
-                                viewModel.setFocusAppMinMinutes(minutes)
+                                viewModel.setFocusAppMinSeconds(seconds)
                                 showFocusMinDialog = false
                             },
                         )
@@ -764,6 +764,16 @@ private fun formatBackupTime(ms: Long): String {
         LocalDate.now().minusDays(1) -> "昨天 $time"
         else -> "${dt.toLocalDate()} $time"
     }
+}
+
+/** 专注 App 最短计入时长的可选档位（秒） */
+private val FOCUS_MIN_SECONDS_OPTIONS = listOf(1, 30, 60, 120, 300)
+
+/** 秒 → 展示文案：1 秒 / 30 秒 / 1 分钟 / 5 分钟 */
+private fun formatMinSeconds(seconds: Int): String = when {
+    seconds < 60 -> "$seconds 秒"
+    seconds % 60 == 0 -> "${seconds / 60} 分钟"
+    else -> "$seconds 秒"
 }
 
 /** 专属日历可选颜色（ARGB） */

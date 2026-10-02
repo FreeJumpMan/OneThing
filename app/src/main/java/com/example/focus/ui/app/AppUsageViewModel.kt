@@ -309,6 +309,7 @@ class AppUsageViewModel(application: Application) : AndroidViewModel(application
                 includeAppUsage = true,
                 excludedCategories = settings.excludedCalendarCategories,
                 switchToleranceMinutes = settings.switchToleranceMinutes,
+                focusAppMinSeconds = settings.focusAppMinSeconds,
             )
             _syncEvent.value = if (count > 0) {
                 TimelineSyncEvent.Done(count)

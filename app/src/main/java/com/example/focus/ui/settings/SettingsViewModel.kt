@@ -111,6 +111,11 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch { store.setSwitchTolerance(minutes) }
     }
 
+    /** 专注 App 的最短计入时长（分钟）：不足该时长的使用不计入专注历史 */
+    fun setFocusAppMinMinutes(minutes: Int) {
+        viewModelScope.launch { store.setFocusAppMinMinutes(minutes) }
+    }
+
     /** 开关某个分类是否写入系统日历 */
     fun setCategoryCalendarSync(categoryId: Long, enabled: Boolean) {
         viewModelScope.launch {

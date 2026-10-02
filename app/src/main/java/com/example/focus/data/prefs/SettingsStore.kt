@@ -25,6 +25,8 @@ data class AppSettings(
     val themeMode: ThemeMode = ThemeMode.FOLLOW_SYSTEM,
     /** 短暂切换阈值（分钟）：离开专注 App 不超过该时长视为未中断 */
     val switchToleranceMinutes: Int = 2,
+    /** 专注 App 的最短计入时长（分钟）：不足该时长的使用不计入专注历史 */
+    val focusAppMinMinutes: Int = 1,
     /**
      * 不写入系统日历的时间分类 id（存字符串）。
      * 默认空集合 = 全部分类都同步；新分类默认允许，无需额外配置。
@@ -55,6 +57,7 @@ class SettingsStore(private val context: Context) {
     private object Keys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val SWITCH_TOLERANCE_MINUTES = intPreferencesKey("switch_tolerance_minutes")
+        val FOCUS_APP_MIN_MINUTES = intPreferencesKey("focus_app_min_minutes")
         val EXCLUDED_CALENDAR_CATEGORIES = stringSetPreferencesKey("excluded_calendar_categories")
         val AUTO_SYNC_CALENDAR = booleanPreferencesKey("auto_sync_calendar")
         val AUTO_SYNC_APP_USAGE = booleanPreferencesKey("auto_sync_app_usage")
@@ -71,6 +74,7 @@ class SettingsStore(private val context: Context) {
                 ?.let { name -> runCatching { ThemeMode.valueOf(name) }.getOrNull() }
                 ?: ThemeMode.FOLLOW_SYSTEM,
             switchToleranceMinutes = prefs[Keys.SWITCH_TOLERANCE_MINUTES] ?: 2,
+            focusAppMinMinutes = prefs[Keys.FOCUS_APP_MIN_MINUTES] ?: 1,
             excludedCalendarCategories = prefs[Keys.EXCLUDED_CALENDAR_CATEGORIES] ?: emptySet(),
             autoSyncCalendar = prefs[Keys.AUTO_SYNC_CALENDAR] ?: false,
             autoSyncAppUsage = prefs[Keys.AUTO_SYNC_APP_USAGE] ?: false,
@@ -88,6 +92,11 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setSwitchTolerance(minutes: Int) {
         context.settingsDataStore.edit { it[Keys.SWITCH_TOLERANCE_MINUTES] = minutes }
+    }
+
+    /** 专注 App 的最短计入时长（分钟） */
+    suspend fun setFocusAppMinMinutes(minutes: Int) {
+        context.settingsDataStore.edit { it[Keys.FOCUS_APP_MIN_MINUTES] = minutes }
     }
 
     suspend fun setExcludedCalendarCategories(categoryIds: Set<String>) {
@@ -139,6 +148,7 @@ class SettingsStore(private val context: Context) {
         context.settingsDataStore.edit { prefs ->
             prefs[Keys.THEME_MODE] = settings.themeMode.name
             prefs[Keys.SWITCH_TOLERANCE_MINUTES] = settings.switchToleranceMinutes
+            prefs[Keys.FOCUS_APP_MIN_MINUTES] = settings.focusAppMinMinutes
             prefs[Keys.EXCLUDED_CALENDAR_CATEGORIES] = settings.excludedCalendarCategories
             prefs[Keys.AUTO_SYNC_CALENDAR] = settings.autoSyncCalendar
             prefs[Keys.AUTO_SYNC_APP_USAGE] = settings.autoSyncAppUsage

@@ -91,6 +91,7 @@ fun SettingsScreen(
 
     var showThemeDialog by remember { mutableStateOf(false) }
     var showToleranceDialog by remember { mutableStateOf(false) }
+    var showFocusMinDialog by remember { mutableStateOf(false) }
     var showCategorySyncDialog by remember { mutableStateOf(false) }
     var showColorDialog by remember { mutableStateOf(false) }
     var showAutoBackupDialog by remember { mutableStateOf(false) }
@@ -232,6 +233,12 @@ fun SettingsScreen(
                     subtitle = "离开专注 App 不超过该时长不打断连续专注",
                     value = "${settings.switchToleranceMinutes} 分钟",
                     onClick = { showToleranceDialog = true },
+                )
+                SettingRow(
+                    title = "最短计入时长",
+                    subtitle = "不足该时长的专注 App 使用不计入历史",
+                    value = "${settings.focusAppMinMinutes} 分钟",
+                    onClick = { showFocusMinDialog = true },
                 )
                 SettingRow(
                     title = "时间分类",
@@ -531,6 +538,38 @@ fun SettingsScreen(
             },
             confirmButton = {
                 TextButton(onClick = { showThemeDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    // 最短计入时长选择
+    if (showFocusMinDialog) {
+        AlertDialog(
+            onDismissRequest = { showFocusMinDialog = false },
+            title = { Text("最短计入时长") },
+            text = {
+                Column {
+                    Text(
+                        text = "专注 App 的单段使用不足这个时长时，不计入专注历史（日历同步仍按各自开关）",
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                    listOf(1, 2, 5, 10).forEach { minutes ->
+                        DialogOption(
+                            text = "$minutes 分钟",
+                            selected = settings.focusAppMinMinutes == minutes,
+                            onClick = {
+                                viewModel.setFocusAppMinMinutes(minutes)
+                                showFocusMinDialog = false
+                            },
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showFocusMinDialog = false }) { Text("取消") }
             },
         )
     }

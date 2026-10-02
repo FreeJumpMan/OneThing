@@ -745,6 +745,7 @@ private fun TimelineRow(
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.End,
+                modifier = Modifier.padding(top = 3.dp),
             )
         }
         Spacer(modifier = Modifier.width(8.dp))

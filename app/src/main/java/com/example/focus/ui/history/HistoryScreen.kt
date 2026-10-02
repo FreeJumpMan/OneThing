@@ -720,9 +720,9 @@ private fun TimelineRow(
             .fillMaxWidth()
             .height(IntrinsicSize.Min),
     ) {
-        // 左侧时间：开始在上、结束在下。
-        // 结束时间放这里是为了让右侧只留时长，一行短一点；
-        // lineHeight 必须显式给，否则会继承主题默认行高把行距撞开。
+        // 左侧时间：开始在上、结束在下，两者同样式
+        // （时间轴的惯常读法：进站出站平权；lineHeight 必须显式给，
+        //  否则会继承主题默认行高把行距撞开）
         Column(
             modifier = Modifier
                 .width(44.dp)
@@ -732,19 +732,18 @@ private fun TimelineRow(
             Text(
                 text = formatTimeOfDay(startMs),
                 fontSize = 12.sp,
-                lineHeight = 14.sp,
+                lineHeight = 16.sp,
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.End,
             )
             Text(
                 text = formatTimeOfDay(endMs),
-                fontSize = 11.sp,
-                lineHeight = 13.sp,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
                 fontFamily = FontFamily.Monospace,
-                color = MaterialTheme.colorScheme.outline,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.End,
-                modifier = Modifier.padding(top = 1.dp),
             )
         }
         Spacer(modifier = Modifier.width(8.dp))

@@ -545,16 +545,20 @@ fun HistoryScreen(viewModel: HistoryViewModel = viewModel()) {
     val debugColumns by viewModel.debugColumns.collectAsState()
     val debugRow by viewModel.debugRow.collectAsState()
     val debugCalendars by viewModel.debugCalendars.collectAsState()
+    val autoDiag by viewModel.autoDiag.collectAsState()
     if (showDebugDialog) {
         DebugDialog(
             columns = debugColumns,
             row = debugRow,
             calendars = debugCalendars,
+            autoDiag = autoDiag,
             onLoadColumns = { viewModel.loadDebugColumns() },
             onLoadRow = { viewModel.loadDebugRow(it) },
+            onLoadAutoDiag = { viewModel.loadAutoDiag() },
             onDismiss = {
                 showDebugDialog = false
                 viewModel.clearDebug()
+                viewModel.clearAutoDiag()
             },
         )
     }
@@ -675,17 +679,33 @@ private fun TimelineRow(
             .fillMaxWidth()
             .height(IntrinsicSize.Min),
     ) {
-        // 开始时间
-        Text(
-            text = formatTimeOfDay(startMs),
-            fontSize = 12.sp,
-            fontFamily = FontFamily.Monospace,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.End,
+        // 左侧时间：开始在上、结束在下。
+        // 结束时间放这里是为了让右侧只留时长，一行短一点；
+        // lineHeight 必须显式给，否则会继承主题默认行高把行距撞开。
+        Column(
             modifier = Modifier
                 .width(44.dp)
                 .padding(top = 2.dp),
-        )
+            horizontalAlignment = Alignment.End,
+        ) {
+            Text(
+                text = formatTimeOfDay(startMs),
+                fontSize = 12.sp,
+                lineHeight = 14.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.End,
+            )
+            Text(
+                text = formatTimeOfDay(endMs),
+                fontSize = 11.sp,
+                lineHeight = 13.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.outline,
+                textAlign = TextAlign.End,
+                modifier = Modifier.padding(top = 1.dp),
+            )
+        }
         Spacer(modifier = Modifier.width(8.dp))
 
         // 时间线：上段线 + 节点 + 下段线（自动记录用空心节点区分）
@@ -812,7 +832,7 @@ private fun TimelineRow(
                 }
             }
             Text(
-                text = "${formatDuration(endMs - startMs)} · 至 ${formatTimeOfDay(endMs)}",
+                text = formatDuration(endMs - startMs),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 1.dp),
@@ -990,8 +1010,10 @@ private fun DebugDialog(
     columns: Pair<List<String>, List<String>>?,
     row: Map<String, String>?,
     calendars: List<String>?,
+    autoDiag: AutoRecordDiagnosis?,
     onLoadColumns: () -> Unit,
     onLoadRow: (String) -> Unit,
+    onLoadAutoDiag: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     var queryTitle by remember { mutableStateOf("") }
@@ -1083,6 +1105,39 @@ private fun DebugDialog(
                     }
                 }
 
+                // 自动记录诊断：看不到「自动」条目时用这个看断在哪一步
+                TextButton(onClick = onLoadAutoDiag) {
+                    Text(
+                        text = if (autoDiag == null) "自动记录诊断" else "刷新自动记录诊断",
+                        fontSize = 12.sp,
+                    )
+                }
+                autoDiag?.let { d ->
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 170.dp)
+                            .verticalScroll(rememberScrollState()),
+                    ) {
+                        listOf(
+                            "日期 = ${d.date}",
+                            "使用情况访问 = ${d.hasUsageAccess}",
+                            "专注 App（${d.focusApps.size}）= ${d.focusApps.joinToString("、").ifEmpty { "（空）" }}",
+                            "系统片段 = ${d.segmentCount} 段 · 合计 ${formatDurationCompact(d.segmentTotalMs)}",
+                            "当天计时记录 = ${d.sessionCount} 条",
+                            "派生的自动记录 = ${d.remainingCount} 条 · 合计 " +
+                                formatDurationCompact(d.remainingTotalMs),
+                            "已隐藏区间 = ${d.hiddenCount} 条",
+                        ).forEach { line ->
+                            Text(
+                                text = line,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontFamily = FontFamily.Monospace,
+                            )
+                        }
+                    }
+                }
+
                 // 列名折叠区：默认收起，需要时展开
                 TextButton(onClick = { showColumns = !showColumns }) {
                     Text(
@@ -1152,7 +1207,7 @@ private fun DebugDialog(
                     )
                 }
                 TextButton(onClick = {
-                    val report = buildDebugReport(columns, row, calendars)
+                    val report = buildDebugReport(columns, row, calendars, autoDiag)
                     val shareIntent = Intent(Intent.ACTION_SEND).apply {
                         type = "text/plain"
                         putExtra(Intent.EXTRA_SUBJECT, "一事 日历诊断")
@@ -1173,10 +1228,33 @@ private fun buildDebugReport(
     columns: Pair<List<String>, List<String>>?,
     row: Map<String, String>?,
     calendars: List<String>?,
+    autoDiag: AutoRecordDiagnosis? = null,
 ): String {
     val sb = StringBuilder()
     sb.appendLine("一事 日历诊断报告")
     sb.appendLine("生成时间: ${LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))}")
+    sb.appendLine()
+    sb.appendLine("=== 自动记录诊断 ===")
+    if (autoDiag == null) {
+        sb.appendLine("(未采集)")
+    } else {
+        sb.appendLine("日期 = ${autoDiag.date}")
+        sb.appendLine("使用情况访问 = ${autoDiag.hasUsageAccess}")
+        sb.appendLine(
+            "专注 App（${autoDiag.focusApps.size}）= " +
+                autoDiag.focusApps.joinToString("、").ifEmpty { "（空）" }
+        )
+        sb.appendLine(
+            "系统片段 = ${autoDiag.segmentCount} 段 · 合计 " +
+                formatDurationCompact(autoDiag.segmentTotalMs)
+        )
+        sb.appendLine("当天计时记录 = ${autoDiag.sessionCount} 条")
+        sb.appendLine(
+            "派生的自动记录 = ${autoDiag.remainingCount} 条 · 合计 " +
+                formatDurationCompact(autoDiag.remainingTotalMs)
+        )
+        sb.appendLine("已隐藏区间 = ${autoDiag.hiddenCount} 条")
+    }
     sb.appendLine()
     sb.appendLine("=== 日历列表 ===")
     if (calendars.isNullOrEmpty()) sb.appendLine("(无)")

@@ -59,6 +59,22 @@ data class HiddenUndo(
     val label: String,
 )
 
+/**
+ * 「专注 App 自动记录」的派生诊断：把链路上每一步的数字摄开。
+ * 看不到自动记录时，看哪一步变成 0 就知道断在哪里。
+ */
+data class AutoRecordDiagnosis(
+    val date: String,
+    val hasUsageAccess: Boolean,
+    val focusApps: List<String>,
+    val segmentCount: Int,
+    val segmentTotalMs: Long,
+    val sessionCount: Int,
+    val remainingCount: Int,
+    val remainingTotalMs: Long,
+    val hiddenCount: Int,
+)
+
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -124,6 +140,52 @@ class HistoryViewModel(application: Application) : AndroidViewModel(application)
     /** 界面回到前台时调用：自动记录不落库，需要主动刷新系统数据 */
     fun refreshAutoRecords() {
         autoRefreshTick.value = System.currentTimeMillis()
+    }
+
+    private val _autoDiag = MutableStateFlow<AutoRecordDiagnosis?>(null)
+    val autoDiag: StateFlow<AutoRecordDiagnosis?> = _autoDiag.asStateFlow()
+
+    /**
+     * 收集当天「自动记录」派生链路上每一步的数字（诊断用，不改任何数据）。
+     * 中途每步单独取，所以即使 UI 上一条都看不到，也能看出是哪一步归零。
+     */
+    fun loadAutoDiag() {
+        viewModelScope.launch {
+            val date = selectedDate.value
+            val packages = focusPackages.first()
+            val sessions = selectedDaySessions.value
+            val hidden = hiddenSegmentDao.getAllOnce()
+            val zone = ZoneId.systemDefault()
+            val dayStart = date.atStartOfDay(zone).toInstant().toEpochMilli()
+            val dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            val toleranceMs = settingsStore.settings.first().switchToleranceMinutes * 60_000L
+
+            val segments = usageRepo.loadFocusUsageSegments(packages, dayStart, dayEnd, toleranceMs)
+            val records = loadAutoRecords(date, packages, sessions, hidden)
+
+            val pm = getApplication<Application>().packageManager
+            val labels = packages.map { pkg ->
+                runCatching {
+                    pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                }.getOrDefault(pkg)
+            }.sorted()
+
+            _autoDiag.value = AutoRecordDiagnosis(
+                date = date.toString(),
+                hasUsageAccess = usageRepo.hasUsageAccess(),
+                focusApps = labels,
+                segmentCount = segments.size,
+                segmentTotalMs = segments.sumOf { it.endMs - it.startMs },
+                sessionCount = sessions.size,
+                remainingCount = records.size,
+                remainingTotalMs = records.sumOf { it.durationMs },
+                hiddenCount = hidden.size,
+            )
+        }
+    }
+
+    fun clearAutoDiag() {
+        _autoDiag.value = null
     }
 
     /** 已同步到日历的会话 id 集合（从映射表实时派生，手动与自动同步都覆盖） */

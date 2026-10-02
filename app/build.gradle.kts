@@ -24,8 +24,8 @@ android {
         applicationId = "com.example.focus"
         minSdk = 26
         targetSdk = 34
-        versionCode = 14
-        versionName = "2.8"
+        versionCode = 15
+        versionName = "2.9"
     }
 
     signingConfigs {

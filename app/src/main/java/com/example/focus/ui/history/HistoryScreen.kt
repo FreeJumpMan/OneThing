@@ -719,7 +719,7 @@ private fun TimelineRow(
         modifier = Modifier
             .fillMaxWidth()
             // 行间距放在 Row 外侧，这样三个子块都以同一根中线居中（圆点正好夹在两个时间中间）
-            .padding(bottom = 18.dp)
+            .padding(bottom = 12.dp)
             .height(IntrinsicSize.Min),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -802,6 +802,7 @@ private fun TimelineRow(
                 Text(
                     text = name,
                     fontSize = 14.sp,
+                    lineHeight = 19.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
@@ -871,6 +872,7 @@ private fun TimelineRow(
             Text(
                 text = formatDuration(endMs - startMs),
                 fontSize = 11.sp,
+                lineHeight = 15.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 1.dp),
             )
